@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Rapport d'Audit PostgreSQL (TEST SAMPLE)</title>
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    :root {
+        --bg: #0f172a;
+        --card-bg: #1e293b;
+        --primary: #38bdf8;
+        --secondary: #64748b;
+        --text: #f8fafc;
+        --text-muted: #94a3b8;
+        --border: #334155;
+        --danger: #ef4444;
+        --warning: #f59e0b;
+        --info: #0ea5e9;
+    }
+    body.light-mode {
+        --bg: #f8fafc;
+        --card-bg: #ffffff;
+        --primary: #2563eb;
+        --secondary: #475569;
+        --text: #1e293b;
+        --text-muted: #64748b;
+        --border: #e2e8f0;
+    }
+    body { 
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        background-color: var(--bg); color: var(--text); margin: 0; padding: 40px; line-height: 1.6;
+        transition: background-color 0.3s, color 0.3s;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    
+    /* Header */
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 50px; }
+    h1 { background: linear-gradient(135deg, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; font-weight: 800; font-size: 3rem; letter-spacing: -0.03em; }
+    .meta { color: var(--text-muted); font-size: 1rem; margin-top: 12px; font-weight: 500; }
+
+    /* Theme Switch */
+    .theme-switch { background: var(--card-bg); border: 1px solid var(--border); padding: 10px 20px; border-radius: 50px; cursor: pointer; display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 0.9rem; color: var(--text); transition: all 0.3s; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .theme-switch:hover { border-color: var(--primary); transform: translateY(-2px); }
+
+    /* Navigation */
+    .nav-bar { 
+        background: var(--card-bg); padding: 20px; border-radius: 12px; border: 1px solid var(--border);
+        box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); margin-bottom: 40px; 
+        display: flex; justify-content: center; gap: 15px; flex-wrap: wrap;
+    }
+    .nav-bar a { 
+        text-decoration: none; color: var(--text); font-weight: 500; font-size: 0.95rem; 
+        padding: 10px 20px; border-radius: 8px; background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.05); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .nav-bar a:hover { background-color: var(--primary); color: #fff; border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(56,189,248,0.3); }
+
+    /* Cards Sections */
+    .card { 
+        background: var(--card-bg); border-radius: 16px; border: 1px solid var(--border);
+        box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); margin-bottom: 40px; overflow: hidden; 
+    }
+    
+    .card-header {
+        background: rgba(255,255,255,0.02); color: var(--text); padding: 20px 25px;
+        font-size: 1.25rem; font-weight: 700; border-bottom: 1px solid var(--border);
+        display: flex; align-items: center; justify-content: space-between;
+    }
+    body.light-mode .card-header { background: #34495e; color: white; }
+    
+    /* Tables */
+    table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.95rem; }
+    th { 
+        background: rgba(255,255,255,0.01); color: var(--text-muted); font-weight: 600; text-transform: uppercase; 
+        font-size: 0.8rem; padding: 16px 25px; text-align: left; border-bottom: 1px solid var(--border);
+        letter-spacing: 0.05em;
+    }
+    body.light-mode th { background: #f8f9fa; color: #64748b; }
+    td { padding: 16px 25px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    tr { transition: background-color 0.2s; }
+    tr:hover { background-color: rgba(255,255,255,0.03); }
+    body.light-mode tr:hover { background-color: #f1f5f9; }
+
+    /* Badges & Utility */
+    .badge { 
+        display: inline-block; padding: 6px 12px; border-radius: 6px; 
+        font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .b-red    { background: rgba(239, 68, 68, 0.1); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.2); }
+    .b-orange { background: rgba(245, 158, 11, 0.1); color: #fcd34d; border: 1px solid rgba(245, 158, 11, 0.2); }
+    .b-blue   { background: rgba(14, 165, 233, 0.1); color: #7dd3fc; border: 1px solid rgba(14, 165, 233, 0.2); }
+    .b-gray   { background: rgba(148, 163, 184, 0.1); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.2); }
+    
+    body.light-mode .b-red { background: #fee2e2; color: #b91c1c; border-color: #fecaca; }
+    body.light-mode .b-orange { background: #fef3c7; color: #b45309; border-color: #fde68a; }
+    body.light-mode .b-blue { background: #e0f2fe; color: #0369a1; border-color: #bae6fd; }
+    body.light-mode .b-gray { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }
+
+    .code { font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 0.9rem; color: #f472b6; background: rgba(244, 114, 182, 0.1); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(244, 114, 182, 0.2); }
+    body.light-mode .code { color: #db2777; background: #fdf2f8; border-color: #fbcfe8; }
+    .val  { font-weight: 700; color: var(--primary); }
+
+    /* Back to Top */
+    #backToTop { position: fixed; bottom: 30px; right: 30px; width: 50px; height: 50px; background: var(--primary); color: white; border: none; border-radius: 50%; cursor: pointer; display: none; align-items: center; justify-content: center; font-size: 1.5rem; box-shadow: 0 4px 15px rgba(0,0,0,0.3); transition: all 0.3s; z-index: 1000; }
+    #backToTop:hover { transform: translateY(-5px); background-color: var(--info); }
+</style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <div>
+            <h1 data-i18n="title">Audit de Santé PostgreSQL - SAMPLE</h1>
+            <div class="meta"><span data-i18n="gen_on">Généré le</span> 02/05/2026 à 22:50</div>
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button class="theme-switch" onclick="toggleLanguage()">
+                <span id="lang-icon">🌍</span> <span id="lang-text">EN</span>
+            </button>
+            <button class="theme-switch" onclick="toggleTheme()">
+                <span id="theme-icon">🌞</span> <span id="theme-text">Mode Clair</span>
+            </button>
+        </div>
+    </header>
+
+    <div class="nav-bar">
+        <a href="#storage" data-i18n="nav_storage">💾 Stockage</a>
+        <a href="#index" data-i18n="nav_index">🔎 Indexation</a>
+        <a href="#schema" data-i18n="nav_schema">🏗️ Schéma</a>
+        <a href="#maint" data-i18n="nav_maint">🧹 Maintenance</a>
+        <a href="#secu" data-i18n="nav_secu">🔒 Sécurité</a>
+    </div>
+
+    <div class="card" id="storage">
+        <div class="card-header" data-i18n="h_storage">1. Tables & Stockage</div>
+        <table>
+            <tr><th data-i18n="th_status">Statut</th><th data-i18n="th_object">Objet (Schema.Table)</th><th data-i18n="th_details">Détails / Impact</th></tr>
+            <tr><td><span class="badge b-red" data-i18n="unlogged">UNLOGGED</span></td><td class="code">public.temp_audit_log</td><td><span data-i18n="size">Taille</span>: <span class="val">1.2 GB</span> (<span data-i18n="non_repl">Non répliqué</span>)</td></tr>
+            <tr><td><span class="badge b-orange" data-i18n="bloat">BLOAT</span></td><td class="code">public.heavy_orders</td><td><span data-i18n="lost">Perdu</span>: <span class="val">450 MB</span> (Ratio: 1.8)</td></tr>
+        </table>
+    </div>
+    
+    <div class="card" id="index">
+        <div class="card-header" data-i18n="h_index">2. Santé des Index</div>
+        <table>
+            <tr><th data-i18n="th_alert">Alerte</th><th data-i18n="th_idx_tbl">Index / Table</th><th data-i18n="th_analysis">Analyse</th></tr>
+            <tr><td><span class="badge b-red" data-i18n="duplicate">DUPLIQUÉ</span></td><td class="code">public.users</td><td>[idx_users_email, idx_users_email_dup]</td></tr>
+            <tr><td><span class="badge b-orange" data-i18n="redundant">REDONDANT</span></td><td class="code">idx_orders_customer_id</td><td><span data-i18n="inc_in">Inclus dans</span>: <span class="code">idx_orders_customer_date</span> (<span data-i18n="gain">Gain</span>: 120 MB)</td></tr>
+        </table>
+    </div>
+
+    <div class="card" id="secu">
+        <div class="card-header" data-i18n="h_secu">5. Sécurité</div>
+        <table>
+            <tr><th data-i18n="th_type">Type</th><th data-i18n="th_name">Nom</th><th data-i18n="th_status">Statut</th></tr>
+            <tr><td><span class="badge b-blue" data-i18n="role">ROLE</span></td><td class="code">app_user</td><td>Pwd: <b>⚠️ NO PASSWORD</b> (Superuser: false)</td></tr>
+            <tr><td><span class="badge b-orange" data-i18n="func">FONCTION</span></td><td class="code">public.delete_all_data</td><td><span data-i18n="secu_def">Exécuté en SECURITY DEFINER</span></td></tr>
+        </table>
+    </div>
+
+    <button id="backToTop" onclick="scrollToTop()" title="Retour en haut">↑</button>
+
+    <script>
+    let currentLang = 'fr';
+    const translations = {
+        fr: {
+            title: "Audit de Santé PostgreSQL - SAMPLE", gen_on: "Généré le",
+            nav_storage: "💾 Stockage", nav_index: "🔎 Indexation", nav_schema: "🏗️ Schéma", nav_maint: "🧹 Maintenance", nav_secu: "🔒 Sécurité",
+            h_storage: "1. Tables & Stockage", h_index: "2. Santé des Index", h_schema: "3. Qualité du Schéma", h_maint: "4. Maintenance & Capacité", h_secu: "5. Sécurité",
+            th_status: "Statut", th_object: "Objet (Schema.Table)", th_details: "Détails / Impact", th_alert: "Alerte", th_idx_tbl: "Index / Table", th_analysis: "Analyse",
+            th_type: "Type", th_obj: "Objet", th_prob: "Problème détecté", th_val_act: "Valeur Actuelle", th_name: "Nom",
+            unlogged: "UNLOGGED", bloat: "BLOAT", frag: "FRAGMENTATION", size: "Taille", non_repl: "Non répliqué", lost: "Perdu", slow_ins: "Insertions lentes",
+            duplicate: "DUPLIQUÉ", redundant: "REDONDANT", ineff: "INEFFICACE", unused: "INUTILISÉ", overhead: "SURCHARGE", invalid: "INVALIDE", missing: "MANQUANT",
+            inc_in: "Inclus dans", gain: "Gain", idx_on_tbl: "index sur cette table", corrupt: "Index corrompu (REINDEX requis)",
+            miss_fk: "FK MANQUANTE", dup_fk: "FK DOUBLON", denorm: "DENORMALISATION", empty_tbl: "TABLE VIDE", unused_tbl: "INUTILISÉE", mono_col: "MONO-COLONNE", null_col: "COLONNE NULL",
+            lock_risk: "Risque Locking", struct_susp: "Structure suspecte", seq_full: "SEQUENCE FULL", tune_av: "TUNING AV", slot_inact: "SLOT INACTIF",
+            retain_wal: "Retient les WAL", role: "ROLE", func: "FONCTION", secu_def: "Exécuté en SECURITY DEFINER", back_to_top: "Retour en haut"
+        },
+        en: {
+            title: "PostgreSQL Health Audit - SAMPLE", gen_on: "Generated on",
+            nav_storage: "💾 Storage", nav_index: "🔎 Indexing", nav_schema: "🏗️ Schema", nav_maint: "🧹 Maintenance", nav_secu: "🔒 Security",
+            h_storage: "1. Tables & Storage", h_index: "2. Index Health", h_schema: "3. Schema Quality", h_maint: "4. Maintenance & Capacity", h_secu: "5. Security",
+            th_status: "Status", th_object: "Object (Schema.Table)", th_details: "Details / Impact", th_alert: "Alert", th_idx_tbl: "Index / Table", th_analysis: "Analysis",
+            th_type: "Type", th_obj: "Object", th_prob: "Problem Detected", th_val_act: "Current Value", th_name: "Name",
+            unlogged: "UNLOGGED", bloat: "BLOAT", frag: "FRAGMENTATION", size: "Size", non_repl: "Not replicated", lost: "Lost", slow_ins: "Slow insertions",
+            duplicate: "DUPLICATE", redundant: "REDUNDANT", ineff: "INEFFICIENT", unused: "UNUSED", overhead: "OVERHEAD", invalid: "INVALID", missing: "MISSING",
+            inc_in: "Included in", gain: "Gain", idx_on_tbl: "indexes on this table", corrupt: "Corrupt index (REINDEX required)",
+            miss_fk: "MISSING FK", dup_fk: "DUPLICATE FK", denorm: "DENORMALIZATION", empty_tbl: "EMPTY TABLE", unused_tbl: "UNUSED TABLE", mono_col: "SINGLE COLUMN", null_col: "NULL COLUMN",
+            lock_risk: "Locking Risk", struct_susp: "Suspicious structure", seq_full: "SEQUENCE FULL", tune_av: "AV TUNING", slot_inact: "INACTIVE SLOT",
+            retain_wal: "Retains WAL", role: "ROLE", func: "FUNCTION", secu_def: "Executed as SECURITY DEFINER", back_to_top: "Back to Top"
+        }
+    };
+
+    function toggleLanguage() {
+        currentLang = currentLang === 'fr' ? 'en' : 'fr';
+        document.getElementById('lang-text').innerText = currentLang === 'fr' ? 'EN' : 'FR';
+        updateUI();
+    }
+
+    function updateUI() {
+        document.querySelectorAll('[data-i18n]').forEach(el => {
+            const key = el.getAttribute('data-i18n');
+            if (translations[currentLang][key]) el.innerText = translations[currentLang][key];
+        });
+        const btt = document.getElementById('backToTop');
+        if (btt) btt.title = translations[currentLang].back_to_top;
+    }
+
+    function toggleTheme() {
+        const body = document.body;
+        const icon = document.getElementById('theme-icon');
+        const text = document.getElementById('theme-text');
+        body.classList.toggle('light-mode');
+        if (body.classList.contains('light-mode')) {
+            icon.innerText = '🌙';
+            text.innerText = currentLang === 'fr' ? 'Mode Sombre' : 'Dark Mode';
+        } else {
+            icon.innerText = '🌞';
+            text.innerText = currentLang === 'fr' ? 'Mode Clair' : 'Light Mode';
+        }
+    }
+    function scrollToTop() {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    window.onscroll = function() {
+        const btn = document.getElementById("backToTop");
+        if (document.body.scrollTop > 500 || document.documentElement.scrollTop > 500) {
+            btn.style.display = "flex";
+        } else {
+            btn.style.display = "none";
+        }
+    };
+    document.addEventListener('DOMContentLoaded', updateUI);
+    </script>
+</div>
+</body>
+</html>
