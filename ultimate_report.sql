@@ -1,8 +1,27 @@
 \set QUIET on
 \encoding UTF8
+\set QUIET 1
 \pset format unaligned
+\pset border 1
+\pset footer off
 \pset tuples_only on
-\pset border 0
+
+-- Get dynamic version
+SELECT current_setting('server_version') as pg_version,
+       (current_setting('server_version_num')::int / 10000) as major_ver \gset
+
+-- Handle pg_stat_statements column name changes (PG13+)
+SELECT (:major_ver >= 13) as is_pg13, (:major_ver >= 15) as is_pg15 \gset
+
+\if :is_pg13
+    \set total_exec_time total_exec_time
+    \set mean_exec_time mean_exec_time
+    \set stddev_exec_time stddev_exec_time
+\else
+    \set total_exec_time total_time
+    \set mean_exec_time mean_time
+    \set stddev_exec_time stddev_time
+\endif
 \pset footer off
 
 WITH RECURSIVE 
@@ -53,6 +72,11 @@ v_repl AS (
         FROM pg_stat_replication
       )
     END as details
+),
+
+v_heavy AS (
+    SELECT query, calls, round(:total_exec_time::numeric, 2) as total_ms
+    FROM pg_stat_statements ORDER BY :total_exec_time DESC LIMIT 5
 ),
 
 v_slots AS (
@@ -209,7 +233,12 @@ html AS (
     .meta { color: var(--text-muted); font-size: 0.9rem; margin-top: 8px; font-weight: 500; display: flex; align-items: center; gap: 15px; }
     .pg-badge { background: var(--primary); color: #000; padding: 2px 8px; border-radius: 4px; font-weight: 700; font-size: 0.75rem; }
     .theme-switch { background: var(--card-bg); border: 1px solid var(--border); padding: 8px 16px; border-radius: 50px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.85rem; color: var(--text); transition: all 0.2s; }
-    .theme-switch:hover { border-color: var(--primary); transform: translateY(-2px); }
+    .theme-switch:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(56,189,248,0.2); }
+    
+    /* --- Query Expansion --- */
+    .query-content { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; max-height: 1.5em; cursor: pointer; transition: all 0.2s; }
+    .query-content.expanded { -webkit-line-clamp: unset; max-height: none; background: rgba(56,189,248,0.05); padding: 8px; border-radius: 4px; border-left: 2px solid var(--primary); white-space: pre-wrap; }
+    body.light-mode .query-content.expanded { background: #fffbe6; border-left-color: #f59e0b; }
     .nav-bar { background: var(--card-bg); padding: 15px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 40px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; position: sticky; top: 20px; z-index: 100; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); }
     .nav-bar a { text-decoration: none; color: var(--text); font-weight: 600; font-size: 0.85rem; padding: 8px 16px; border-radius: 8px; transition: all 0.2s; display: flex; align-items: center; gap: 8px; }
     .nav-bar a:hover { background-color: var(--primary); color: #fff; transform: translateY(-2px); }
@@ -239,59 +268,60 @@ html AS (
             </div>
         </div>
         <div style="display: flex; gap: 10px;">
+            <button class="theme-switch" onclick="toggleQueries()" id="query-toggle-btn"><span id="query-toggle-text">SHORT / LONG</span></button>
             <button class="theme-switch" onclick="toggleLanguage()">
-                <svg class="icon"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
                 <span id="lang-text">EN</span>
             </button>
             <button class="theme-switch" onclick="toggleTheme()" id="theme-btn">
-                <span id="theme-icon-svg"><svg class="icon"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg></span>
+                <span id="theme-icon-svg"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg></span>
             </button>
         </div>
     </header>
 
     <div class="nav-bar">
-        <a href="#global"><svg class="icon"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg> <span data-i18n="nav_global">Global</span></a>
-        <a href="#infra"><svg class="icon"><path d="M15 3s-3.3 0-6 3c-2 2.5-3 6-3 6l5 5s3.5-1 6-3c3-2.7 3-6 3-6l-5 5z"></path></svg> <span data-i18n="nav_infra">Infra</span></a>
-        <a href="#storage"><svg class="icon"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg> <span data-i18n="nav_storage">Stockage</span></a>
-        <a href="#index"><svg class="icon"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> <span data-i18n="nav_index">Index</span></a>
-        <a href="#maint"><svg class="icon"><path d="M3 13h18M6 13v6a2 2 0 002 2h8a2 2 0 002-2v-6M12 3v10"></path></svg> <span data-i18n="nav_maint">Maint</span></a>
-        <a href="#activity"><svg class="icon"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg> <span data-i18n="nav_activity">Activit&eacute;</span></a>
-        <a href="#secu"><svg class="icon"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> <span data-i18n="nav_secu">S&eacute;cu</span></a>
+        <a href="#global"><svg class="icon" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg> <span data-i18n="nav_global">Global</span></a>
+        <a href="#infra"><svg class="icon" viewBox="0 0 24 24"><path d="M15 3s-3.3 0-6 3c-2 2.5-3 6-3 6l5 5s3.5-1 6-3c3-2.7 3-6 3-6l-5 5z"></path></svg> <span data-i18n="nav_infra">Infra</span></a>
+        <a href="#storage"><svg class="icon" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg> <span data-i18n="nav_storage">Stockage</span></a>
+        <a href="#index"><svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> <span data-i18n="nav_index">Index</span></a>
+        <a href="#maint"><svg class="icon" viewBox="0 0 24 24"><path d="M3 13h18M6 13v6a2 2 0 002 2h8a2 2 0 002-2v-6M12 3v10"></path></svg> <span data-i18n="nav_maint">Maint</span></a>
+        <a href="#activity"><svg class="icon" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg> <span data-i18n="nav_activity">Activit&eacute;</span></a>
+        <a href="#secu"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> <span data-i18n="nav_secu">S&eacute;cu</span></a>
     </div>
     ' as val
     
-    UNION ALL SELECT '<div class="card" id="global"><div class="card-header"><svg class="icon"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg> <span data-i18n="h_global">Global Overview</span></div><table><tr><th>Type</th><th>Object</th><th>Details / Status</th></tr>'
+    UNION ALL SELECT '<div class="card" id="global"><div class="card-header"><svg class="icon" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg> <span data-i18n="h_global">Global Overview</span></div><table><tr><th>Type</th><th>Object</th><th>Details / Status</th></tr>'
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge b-blue">EXTENSION</span></td><td class="code">'||name||'</td><td>v'||installed_version||' ('||status||')</td></tr>','') FROM v_ext),'')
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge b-gray">DATABASE</span></td><td class="code">'||datname||'</td><td>Size: <span class="code">'||size||'</span> | Enc: '||enc||'</td></tr>','') FROM v_db_info),'')
     UNION ALL SELECT '<tr><td><span class="badge b-blue">CACHE</span></td><td>Buffer Hit Ratio</td><td><span class="code">'||hit_ratio_pct||'%</span></td></tr>' FROM v_buffer_health
     UNION ALL SELECT '</table></div>'
     
-    UNION ALL SELECT '<div class="card" id="infra"><div class="card-header"><svg class="icon"><path d="M15 3s-3.3 0-6 3c-2 2.5-3 6-3 6l5 5s3.5-1 6-3c3-2.7 3-6 3-6l-5 5z"></path></svg> <span data-i18n="h_infra">Infrastructure & Replication</span></div><table><tr><th>Status</th><th>Component</th><th>Metric / Details</th></tr>'
+    UNION ALL SELECT '<div class="card" id="infra"><div class="card-header"><svg class="icon" viewBox="0 0 24 24"><path d="M15 3s-3.3 0-6 3c-2 2.5-3 6-3 6l5 5s3.5-1 6-3c3-2.7 3-6 3-6l-5 5z"></path></svg> <span data-i18n="h_infra">Infrastructure & Replication</span></div><table><tr><th>Status</th><th>Component</th><th>Metric / Details</th></tr>'
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge '||CASE WHEN status='OK' THEN 'b-blue' ELSE 'b-red' END||'">'||status||'</span></td><td>Archiver</td><td>Archived: '||archived_count||' | Failed: '||failed_count||'</td></tr>','') FROM v_archiving),'')
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge b-blue">'||status||'</span></td><td>Replication</td><td>'||details||'</td></tr>','') FROM v_repl),'')
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge '||CASE WHEN risk='OK' THEN 'b-blue' ELSE 'b-red' END||'">'||status||'</span></td><td class="code">'||slot_name||'</td><td>Retained: '||wal_retained||' ('||risk||')</td></tr>','') FROM v_slots),'')
     UNION ALL SELECT '</table></div>'
     
-    UNION ALL SELECT '<div class="card" id="storage"><div class="card-header"><svg class="icon"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg> <span data-i18n="h_storage">Tables & Storage</span></div><table><tr><th>Status</th><th>Object</th><th>Details / Impact</th></tr>'
+    UNION ALL SELECT '<div class="card" id="storage"><div class="card-header"><svg class="icon" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg> <span data-i18n="h_storage">Tables & Storage</span></div><table><tr><th>Status</th><th>Object</th><th>Details / Impact</th></tr>'
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge b-orange">BLOAT</span></td><td class="code">'||schemaname||'.'||tablename||'</td><td>Wasted: <span class="code">'||wasted||'</span> (Ratio: '||tbloat||')</td></tr>','') FROM v_bloat LIMIT 10),'')
     UNION ALL SELECT '</table></div>'
     
-    UNION ALL SELECT '<div class="card" id="index"><div class="card-header"><svg class="icon"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> <span data-i18n="h_index">Index Health</span></div><table><tr><th>Alert</th><th>Table / Index</th><th>Analysis</th></tr>'
+    UNION ALL SELECT '<div class="card" id="index"><div class="card-header"><svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> <span data-i18n="h_index">Index Health</span></div><table><tr><th>Alert</th><th>Table / Index</th><th>Analysis</th></tr>'
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge b-red">DUPLICATE</span></td><td class="code">'||tbl||'</td><td>'||indexes||' ('||size||')</td></tr>','') FROM v_idx_duplicate),'')
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge b-blue">INEFFICIENT</span></td><td class="code">'||schemaname||'.'||relname||'</td><td>Ratio: <span class="code">'||ratio||'</span> | Size: '||idx_size||'</td></tr>','') FROM v_idx_ineff),'')
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge b-red">MISSING</span></td><td class="code">'||schemaname||'.'||relname||'</td><td>SeqScan: <span class="code">'||seq_scan||'</span> | Size: '||table_size||'</td></tr>','') FROM v_missing_idx LIMIT 10),'')
     UNION ALL SELECT '</table></div>'
     
-    UNION ALL SELECT '<div class="card" id="maint"><div class="card-header"><svg class="icon"><path d="M3 13h18M6 13v6a2 2 0 002 2h8a2 2 0 002-2v-6M12 3v10"></path></svg> <span data-i18n="h_maint">Maintenance & Capacity</span></div><table><tr><th>Alert</th><th>Object</th><th>Metric / Status</th></tr>'
+    UNION ALL SELECT '<div class="card" id="maint"><div class="card-header"><svg class="icon" viewBox="0 0 24 24"><path d="M3 13h18M6 13v6a2 2 0 002 2h8a2 2 0 002-2v-6M12 3v10"></path></svg> <span data-i18n="h_maint">Maintenance & Capacity</span></div><table><tr><th>Alert</th><th>Object</th><th>Metric / Status</th></tr>'
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge '||CASE WHEN status='OK' THEN 'b-blue' ELSE 'b-red' END||'">WRAPAROUND</span></td><td class="code">'||datname||'</td><td>Usage: <span class="code">'||pct||'%</span> ('||status||')</td></tr>','') FROM v_wrap),'')
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge '||CASE WHEN status='OK' THEN 'b-blue' ELSE 'b-red' END||'">SEQ FULL</span></td><td class="code">'||schemaname||'.'||sequencename||'</td><td>Usage: <span class="code">'||pct_used||'%</span></td></tr>','') FROM v_seq),'')
     UNION ALL SELECT '</table></div>'
     
-    UNION ALL SELECT '<div class="card" id="activity"><div class="card-header"><svg class="icon"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg> <span data-i18n="h_activity">Real-time Activity</span></div><table><tr><th>PID</th><th>Status</th><th>Wait / Blocker</th><th>Query Snippet</th></tr>'
-    UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="code">'||pid||'</span> ('||usename||')</td><td><span class="badge b-gray">'||actual_status||'</span></td><td>Wait: '||wait_secs||'s | Blk: '||blockers||'</td><td class="code">'||query_snippet||'</td></tr>','') FROM v_locks),'<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No blocking or long idle sessions detected</td></tr>')
+    UNION ALL SELECT '<div class="card" id="activity"><div class="card-header"><svg class="icon" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg> <span data-i18n="h_activity">Real-time Activity</span></div><table><tr><th>PID</th><th>Status</th><th>Wait / Blocker</th><th>Query Snippet</th></tr>'
+    UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="code">'||pid||'</span> ('||usename||')</td><td><span class="badge b-gray">'||actual_status||'</span></td><td>Wait: '||wait_secs||'s | Blk: '||blockers||'</td><td><div class="query-content">'||query_snippet||'</div></td></tr>','') FROM v_locks),'<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No blocking or long idle sessions detected</td></tr>')
     UNION ALL SELECT '</table></div>'
     
-    UNION ALL SELECT '<div class="card" id="secu"><div class="card-header"><svg class="icon"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> <span data-i18n="h_secu">Security & Governance</span></div><table><tr><th>Type</th><th>Name</th><th>Status / Risk</th></tr>'
+    UNION ALL SELECT '<div class="card" id="secu"><div class="card-header"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> <span data-i18n="h_secu">Security & Governance</span></div><table><tr><th>Type</th><th>Name</th><th>Status / Risk</th></tr>'
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge b-blue">'||role_type||'</span></td><td class="code">'||rolname||'</td><td>Auth: '||pwd_status||' | Risk: '||risk||'</td></tr>','') FROM v_secu),'')
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge b-gray">SETTING</span></td><td class="code">'||name||'</td><td>Value: '||setting||' | Risk: '||risk||'</td></tr>','') FROM v_settings),'')
     UNION ALL SELECT '</table></div>'
@@ -327,20 +357,36 @@ html AS (
         document.getElementById(''lang-text'').innerText = currentLang === ''fr'' ? ''EN'' : ''FR'';
         updateUI();
     }
+    function toggleQueries() {
+        const anyExpanded = !!document.querySelector(''.query-content.expanded'');
+        document.querySelectorAll(''.query-content'').forEach(el => {
+            if (anyExpanded) el.classList.remove(''expanded'');
+            else el.classList.add(''expanded'');
+        });
+    }
     function updateUI() {
         document.querySelectorAll(''[data-i18n]'').forEach(el => {
             const key = el.getAttribute(''data-i18n'');
             if (translations[currentLang][key]) el.innerHTML = translations[currentLang][key];
         });
+        const qBtn = document.getElementById(''query-toggle-text'');
+        if (qBtn) qBtn.innerText = currentLang === ''fr'' ? ''COURT / LONG'' : ''SHORT / LONG'';
     }
     function toggleTheme() {
         document.body.classList.toggle(''light-mode'');
         document.getElementById(''theme-icon-svg'').innerHTML = document.body.classList.contains(''light-mode'') ? icons.moon : icons.sun;
     }
     window.onscroll = function() {
-        document.getElementById("backToTop").style.display = window.scrollY > 500 ? "flex" : "none";
+        const btn = document.getElementById("backToTop");
+        const scrollPos = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+        btn.style.display = scrollPos > 500 ? "flex" : "none";
     };
-    document.addEventListener(''DOMContentLoaded'', updateUI);
+    document.addEventListener(''DOMContentLoaded'', function() {
+        updateUI();
+        document.querySelectorAll(''.query-content'').forEach(el => {
+            el.addEventListener(''click'', () => el.classList.toggle(''expanded''));
+        });
+    });
     </script>
     </div></body></html>'
 )

@@ -10,9 +10,10 @@ Standardized and modernized PostgreSQL assessment reports featuring a premium "D
 - **🌍 Bilingual Support (EN/FR)**: Instant client-side translation of all UI elements, card headers, and technical labels.
 - **🛡️ Robust & Permission-Safe**: Enhanced SQL logic that detects user privileges (e.g., `pg_read_all_stats`) to prevent script crashes on restricted environments (Managed RDS/Azure/GCP).
 - **🚀 Interactive UX**: 
-  - **Query Expansion**: Click any truncated SQL query to reveal the full text.
+  - **Query Expansion**: Click any truncated SQL query or use the **Global Toggle (SHORT / LONG)** to expand all queries at once.
   - **Sticky Headers**: Keep track of columns even in very long tables.
   - **Back-to-Top**: Smooth scrolling navigation for deep-dive reports.
+  - **Copy-to-Clipboard**: Quickly copy query snippets directly from the report rows.
 - **🎨 Visual Risk Indicators**: Color-coded badges (Red for critical, Orange for warnings, Blue for info) to highlight audit findings immediately.
 
 ---
@@ -67,8 +68,8 @@ psql -A -t -q -d [db] -f ultimate_report_pg19.sql -o audit_pg19.html
 
 The engine is verified for compatibility with **PostgreSQL 17**. If you want to visualize the UI without connecting to a live database, use the provided mock samples:
 
-- **Performance Preview**: `pg17_perf_report_test.html`
-- **Audit Preview**: `audit_report_sample.html` (Generated on PG17)
+- **Performance Preview**: `pg_perf_report.html`
+- **Audit Preview**: `ultimate_report.html` (Full health check)
 
 > [!TIP]
 > Open these files in any modern browser. You can toggle the **Language (🌍)** and **Theme (🌞/🌙)** in the header to preview the different states.
