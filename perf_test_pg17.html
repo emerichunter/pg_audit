@@ -58,6 +58,8 @@
   /* Back to Top */
   #backToTop { position: fixed; bottom: 30px; right: 30px; width: 50px; height: 50px; background: var(--primary); color: white; border: none; border-radius: 50%; cursor: pointer; display: none; align-items: center; justify-content: center; font-size: 1.5rem; box-shadow: 0 4px 15px rgba(0,0,0,0.3); transition: all 0.3s; z-index: 1000; }
   #backToTop:hover { transform: translateY(-5px); background: var(--hover); }
+  .icon { width: 18px; height: 18px; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; vertical-align: middle; }
+  #backToTop .icon { stroke: white; width: 22px; height: 22px; }
 
   .timestamp { font-size: 0.85em; color: var(--text-muted); text-align: center; margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--border); font-weight: 500; }
 </style>
@@ -281,7 +283,7 @@ html AS (
     UNION ALL SELECT $224
 )
 SELECT string_agg(val, $225) FROM html|1|218 bytes|218.00|2
-SELECT current_setting($1) as pg_version|11|0 bytes|0.00|0
+SELECT current_setting($1) as pg_version|13|0 bytes|0.00|0
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -290,7 +292,7 @@ SELECT
 FROM pg_stat_statements
 WHERE jit_functions > $3
 ORDER BY (jit_generation_time + jit_inlining_time + jit_optimization_time + jit_emission_time) DESC 
-LIMIT $4|12|0 bytes|0.00|0
+LIMIT $4|14|0 bytes|0.00|0
 WITH RECURSIVE 
 constants AS (SELECT current_setting($1)::numeric AS bs, $2 AS chunk_size),
 
@@ -511,7 +513,7 @@ html AS (
     UNION ALL SELECT $265
 )
 SELECT string_agg(val, $266) FROM html|1|0 bytes|0.00|0
-SELECT $1|3|0 bytes|0.00|0
+SELECT $1|5|0 bytes|0.00|0
 SELECT
     query AS "Requete (Cliquer)", 
     calls AS "Appels",
@@ -521,8 +523,8 @@ SELECT
 FROM pg_stat_statements
 WHERE (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) > $6
 ORDER BY (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) DESC 
-LIMIT $7|13|0 bytes|0.00|0
-SELECT $1 || $2 || $3 || $4 || $5|3|0 bytes|0.00|0
+LIMIT $7|15|0 bytes|0.00|0
+SELECT $1 || $2 || $3 || $4 || $5|5|0 bytes|0.00|0
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -530,7 +532,7 @@ SELECT
     (shared_blks_dirtied + local_blks_dirtied) AS "Blocks Salis"
 FROM pg_stat_statements
 ORDER BY (shared_blks_hit + shared_blks_read) DESC
-LIMIT $4|12|0 bytes|0.00|0
+LIMIT $4|14|0 bytes|0.00|0
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -541,38 +543,9 @@ FROM pg_stat_statements
 WHERE calls > $5 
   AND stddev_exec_time > mean_exec_time
 ORDER BY stddev_exec_time DESC 
-LIMIT $6|12|0 bytes|0.00|0
+LIMIT $6|14|0 bytes|0.00|0
 <h2 id="freq" data-i18n="h2_freq">5. Haute Frequence</h2>
 <p data-i18n="p_freq">Requetes rapides mais massives.</p>
-SELECT 
-    query AS "Requete (Cliquer)",
-    calls AS "Appels",
-    round(total_exec_time::numeric, $1) AS "Total (ms)",
-    round((total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time))::numeric, $2) AS "CPU Time (ms)",
-    round(($3 * (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) / NULLIF(total_exec_time, $4))::numeric, $5) AS "PCT CPU"
-FROM pg_stat_statements
-WHERE calls > $6
-ORDER BY (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) DESC 
-LIMIT $7|13|0.72|9.30|0.76
-SELECT 
-    query AS "Requete (Cliquer)",
-    calls AS "Appels",
-    pg_size_pretty(wal_bytes) AS "Total WAL",
-    round((wal_bytes / NULLIF(calls, $1))::numeric, $2) AS "Bytes / Appel",
-    wal_records AS "WAL Records"
-FROM pg_stat_statements
-ORDER BY wal_bytes DESC 
-LIMIT $3|13|0.60|7.80|0.64
-SELECT
-    query AS "Requete (Cliquer)", 
-    calls AS "Appels",
-    round(mean_exec_time::numeric, $1) AS "Moyenne (ms)",
-    round((shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)::numeric, $2) AS "IO Wait (ms)",
-    round(($3 * (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) / NULLIF(total_exec_time, $4))::numeric, $5) AS "PCT IO"
-FROM pg_stat_statements
-WHERE (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) > $6
-ORDER BY (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) DESC 
-LIMIT $7|13|0.45|5.79|0.48
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -582,7 +555,46 @@ SELECT
 FROM pg_stat_statements
 WHERE plans > $6
 ORDER BY total_plan_time DESC
-LIMIT $7|13|0.35|4.56|0.37
+LIMIT $7|15|0.36|5.47|0.44
+SELECT 
+    query AS "Requete (Cliquer)",
+    calls AS "Appels",
+    pg_size_pretty(wal_bytes) AS "Total WAL",
+    round((wal_bytes / NULLIF(calls, $1))::numeric, $2) AS "Bytes / Appel",
+    wal_records AS "WAL Records"
+FROM pg_stat_statements
+ORDER BY wal_bytes DESC 
+LIMIT $3|15|0.61|9.21|0.74
+SELECT
+    query AS "Requete (Cliquer)", 
+    calls AS "Appels",
+    round(mean_exec_time::numeric, $1) AS "Moyenne (ms)",
+    round((shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)::numeric, $2) AS "IO Wait (ms)",
+    round(($3 * (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) / NULLIF(total_exec_time, $4))::numeric, $5) AS "PCT IO"
+FROM pg_stat_statements
+WHERE (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) > $6
+ORDER BY (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) DESC 
+LIMIT $7|15|1.11|16.68|1.34
+SELECT 
+    query AS "Requete (Cliquer)",
+    calls AS "Appels",
+    round(total_exec_time::numeric, $1) AS "Total (ms)",
+    round((total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time))::numeric, $2) AS "CPU Time (ms)",
+    round(($3 * (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) / NULLIF(total_exec_time, $4))::numeric, $5) AS "PCT CPU"
+FROM pg_stat_statements
+WHERE calls > $6
+ORDER BY (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) DESC 
+LIMIT $7|15|0.76|11.41|0.92
+SELECT 
+    query AS "Requete (Cliquer)",
+    calls AS "Appels",
+    temp_blks_written AS "Blks Written",
+    pg_size_pretty(temp_blks_written * $1) AS "Total Temp Size",
+    round((temp_blks_written::numeric / NULLIF(calls, $2)), $3) AS "Blks / Appel"
+FROM pg_stat_statements
+WHERE temp_blks_written > $4
+ORDER BY temp_blks_written DESC 
+LIMIT $5|14|0.33|4.60|0.37
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -591,7 +603,7 @@ SELECT
 FROM pg_stat_statements
 WHERE jit_functions > $3
 ORDER BY (jit_generation_time + jit_inlining_time + jit_optimization_time + jit_emission_time) DESC 
-LIMIT $4|12|0.34|4.08|0.34
+LIMIT $4|14|0.38|5.30|0.43
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -602,7 +614,7 @@ FROM pg_stat_statements
 WHERE calls > $5 
   AND stddev_exec_time > mean_exec_time
 ORDER BY stddev_exec_time DESC 
-LIMIT $6|12|0.36|4.26|0.35
+LIMIT $6|14|0.41|5.75|0.46
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -611,17 +623,7 @@ SELECT
     round(($3 * total_exec_time / SUM(total_exec_time) OVER())::numeric, $4) AS "PCT Charge"
 FROM pg_stat_statements
 ORDER BY calls DESC 
-LIMIT $5|12|0.65|7.75|0.64
-SELECT 
-    query AS "Requete (Cliquer)",
-    calls AS "Appels",
-    temp_blks_written AS "Blks Written",
-    pg_size_pretty(temp_blks_written * $1) AS "Total Temp Size",
-    round((temp_blks_written::numeric / NULLIF(calls, $2)), $3) AS "Blks / Appel"
-FROM pg_stat_statements
-WHERE temp_blks_written > $4
-ORDER BY temp_blks_written DESC 
-LIMIT $5|12|0.31|3.76|0.31
+LIMIT $5|14|0.64|9.02|0.73
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -629,11 +631,11 @@ SELECT
     (shared_blks_dirtied + local_blks_dirtied) AS "Blocks Salis"
 FROM pg_stat_statements
 ORDER BY (shared_blks_hit + shared_blks_read) DESC
-LIMIT $4|12|0.46|5.52|0.45
+LIMIT $4|14|0.51|7.13|0.57
 SELECT 
     dealloc AS "Deallocations", 
     stats_reset AS "Dernier Reset"
-FROM pg_stat_statements_info|12|0.10|1.22|0.10
+FROM pg_stat_statements_info|14|0.10|1.44|0.12
 <h2 id="heavy" data-i18n="h2_heavy">6. Lourdes (Candidats Parallelisme)</h2>
 <p data-i18n="p_heavy">Les plus longues en temps absolu. Candidats potentiels pour parallelisme.</p>
 WITH RECURSIVE 
@@ -1259,43 +1261,6 @@ html AS (
 )
 SELECT string_agg(val, $225) FROM html|1|138.91|138.91|1
 CREATE EXTENSION pg_stat_statements|1|51.56|51.56|0
-SELECT 
-    query AS "Requete (Cliquer)",
-    calls AS "Appels",
-    round(total_exec_time::numeric, $1) AS "Total Time (ms)",
-    round(mean_exec_time::numeric, $2) AS "Moyenne (ms)",
-    rows AS "Lignes Totales"
-FROM pg_stat_statements
-ORDER BY total_exec_time DESC 
-LIMIT $3|12|9.80|0.82|117
-SELECT 
-    query AS "Requete (Cliquer)",
-    calls AS "Appels",
-    round(total_exec_time::numeric, $1) AS "Total (ms)",
-    round((total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time))::numeric, $2) AS "CPU Time (ms)",
-    round(($3 * (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) / NULLIF(total_exec_time, $4))::numeric, $5) AS "PCT CPU"
-FROM pg_stat_statements
-WHERE calls > $6
-ORDER BY (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) DESC 
-LIMIT $7|13|9.30|0.72|0
-SELECT 
-    query AS "Requete (Cliquer)",
-    calls AS "Appels",
-    round(mean_exec_time::numeric, $1) AS "Moyenne (ms)",
-    round(total_exec_time::numeric, $2) AS "Total (ms)",
-    round(($3 * total_exec_time / SUM(total_exec_time) OVER())::numeric, $4) AS "PCT Charge"
-FROM pg_stat_statements
-ORDER BY calls DESC 
-LIMIT $5|13|8.28|0.64|126
-SELECT 
-    query AS "Requete (Cliquer)",
-    calls AS "Appels",
-    pg_size_pretty(wal_bytes) AS "Total WAL",
-    round((wal_bytes / NULLIF(calls, $1))::numeric, $2) AS "Bytes / Appel",
-    wal_records AS "WAL Records"
-FROM pg_stat_statements
-ORDER BY wal_bytes DESC 
-LIMIT $3|13|7.80|0.60|125
 SELECT
     query AS "Requete (Cliquer)", 
     calls AS "Appels",
@@ -1305,7 +1270,44 @@ SELECT
 FROM pg_stat_statements
 WHERE (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) > $6
 ORDER BY (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) DESC 
-LIMIT $7|13|5.79|0.45|0
+LIMIT $7|15|16.68|1.11|0
+SELECT 
+    query AS "Requete (Cliquer)",
+    calls AS "Appels",
+    round(total_exec_time::numeric, $1) AS "Total Time (ms)",
+    round(mean_exec_time::numeric, $2) AS "Moyenne (ms)",
+    rows AS "Lignes Totales"
+FROM pg_stat_statements
+ORDER BY total_exec_time DESC 
+LIMIT $3|14|11.54|0.82|137
+SELECT 
+    query AS "Requete (Cliquer)",
+    calls AS "Appels",
+    round(total_exec_time::numeric, $1) AS "Total (ms)",
+    round((total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time))::numeric, $2) AS "CPU Time (ms)",
+    round(($3 * (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) / NULLIF(total_exec_time, $4))::numeric, $5) AS "PCT CPU"
+FROM pg_stat_statements
+WHERE calls > $6
+ORDER BY (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) DESC 
+LIMIT $7|15|11.41|0.76|0
+SELECT 
+    query AS "Requete (Cliquer)",
+    calls AS "Appels",
+    round(mean_exec_time::numeric, $1) AS "Moyenne (ms)",
+    round(total_exec_time::numeric, $2) AS "Total (ms)",
+    round(($3 * total_exec_time / SUM(total_exec_time) OVER())::numeric, $4) AS "PCT Charge"
+FROM pg_stat_statements
+ORDER BY calls DESC 
+LIMIT $5|15|9.90|0.66|146
+SELECT 
+    query AS "Requete (Cliquer)",
+    calls AS "Appels",
+    pg_size_pretty(wal_bytes) AS "Total WAL",
+    round((wal_bytes / NULLIF(calls, $1))::numeric, $2) AS "Bytes / Appel",
+    wal_records AS "WAL Records"
+FROM pg_stat_statements
+ORDER BY wal_bytes DESC 
+LIMIT $3|15|9.21|0.61|145
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -1313,13 +1315,19 @@ SELECT
     (shared_blks_dirtied + local_blks_dirtied) AS "Blocks Salis"
 FROM pg_stat_statements
 ORDER BY (shared_blks_hit + shared_blks_read) DESC
-LIMIT $4|12|5.52|0.46|120
+LIMIT $4|14|7.13|0.51|140
 <h2 id="jitter" data-i18n="h2_jitter">7. Instabilite (Jitter)</h2>
 <p data-i18n="p_jitter">Ecart-type eleve (plans instables).</p>
-SELECT 
-    dealloc AS "Deallocations", 
-    stats_reset AS "Dernier Reset"
-FROM pg_stat_statements_info|12|0.10|0.10|1.02
+SELECT
+    query AS "Requete (Cliquer)", 
+    calls AS "Appels",
+    round(mean_exec_time::numeric, $1) AS "Moyenne (ms)",
+    round((shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)::numeric, $2) AS "IO Wait (ms)",
+    round(($3 * (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) / NULLIF(total_exec_time, $4))::numeric, $5) AS "PCT IO"
+FROM pg_stat_statements
+WHERE (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) > $6
+ORDER BY (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) DESC 
+LIMIT $7|15|1.11|2.47|2.22
 <h2 id="temp" data-i18n="h2_temp">8. Temp Files (Disk Spill)</h2>
 <p data-i18n="p_temp">Manque de work_mem.</p>
 <h2 id="cache" data-i18n="h2_cache">9. Cache Miss et Blocs Salis</h2>
@@ -1956,7 +1964,7 @@ SELECT
 FROM pg_stat_statements
 WHERE calls > $6
 ORDER BY (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) DESC 
-LIMIT $7|13|100.00|0
+LIMIT $7|15|100.00|0
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -1965,7 +1973,7 @@ SELECT
     round(($3 * total_exec_time / SUM(total_exec_time) OVER())::numeric, $4) AS "PCT Charge"
 FROM pg_stat_statements
 ORDER BY calls DESC 
-LIMIT $5|13|100.00|0
+LIMIT $5|15|100.00|0
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -1974,9 +1982,9 @@ SELECT
     wal_records AS "WAL Records"
 FROM pg_stat_statements
 ORDER BY wal_bytes DESC 
-LIMIT $3|13|100.00|0
+LIMIT $3|15|100.00|0
 SELECT $1 FROM pg_database WHERE datname = $2|1|100.00|0
-SELECT $1|3||0
+SELECT $1|5||0
 SELECT 
     query AS "Requete (Cliquer)",
     calls AS "Appels",
@@ -1984,7 +1992,7 @@ SELECT
     (shared_blks_dirtied + local_blks_dirtied) AS "Blocks Salis"
 FROM pg_stat_statements
 ORDER BY (shared_blks_hit + shared_blks_read) DESC
-LIMIT $4|12||0
+LIMIT $4|14||0
 <h2 id="jit" data-i18n="h2_jit">10. Surcharge JIT</h2>
 <h2 id="info" data-i18n="h2_info">11. Sante Globale</h2>
 0|2026-05-02 21:03:35.706475+00
@@ -2013,7 +2021,7 @@ const translations = {
     "WAL Records": "WAL Records", "PCT Charge": "PCT Charge", "Total Time (ms)": "Total Time (ms)", "Lignes Totales": "Lignes Totales",
     "Ecart-Type (ms)": "Ecart-Type (ms)", "Ratio Var.": "Ratio Var.", "Blks Written": "Blks Written", "Total Temp Size": "Total Temp Size",
     "Blks / Appel": "Blks / Appel", "Cache Hit PCT": "Cache Hit PCT", "Blocks Salis": "Blocks Salis", "JIT Overhead (ms)": "JIT Overhead (ms)",
-    "Deallocations": "Deallocations", "Dernier Reset": "Dernier Reset", "timestamp_prefix": "G?n?r? le: ", "back_to_top": "Retour en haut"
+    "Deallocations": "Deallocations", "Dernier Reset": "Dernier Reset", "timestamp_prefix": "G??n??r?? le: ", "back_to_top": "Retour en haut"
   },
   en: {
     title: "PostgreSQL Performance Report",
@@ -2060,13 +2068,11 @@ function toggleTheme() {
   const icon = document.getElementById("theme-icon");
   const text = document.getElementById("theme-text");
   body.classList.toggle("light-mode");
-  if (body.classList.contains("light-mode")) {
-    icon.innerHTML = <svg class="icon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>;
-    text.innerText = currentLang === "fr" ? "Mode Sombre" : "Dark Mode";
-  } else {
-    icon.innerHTML = <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>;
-    text.innerText = currentLang === "fr" ? "Mode Clair" : "Light Mode";
-  }
+  const isLight = body.classList.contains("light-mode");
+  icon.innerHTML = isLight
+    ? "<svg class=\"icon\" viewBox=\"0 0 24 24\"><path d=\"M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z\"></path></svg>"
+    : "<svg class=\"icon\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"5\"></circle><line x1=\"12\" y1=\"1\" x2=\"12\" y2=\"3\"></line><line x1=\"12\" y1=\"21\" x2=\"12\" y2=\"23\"></line><line x1=\"4.22\" y1=\"4.22\" x2=\"5.64\" y2=\"5.64\"></line><line x1=\"18.36\" y1=\"18.36\" x2=\"19.78\" y2=\"19.78\"></line><line x1=\"1\" y1=\"12\" x2=\"3\" y2=\"12\"></line><line x1=\"21\" y1=\"12\" x2=\"23\" y2=\"12\"></line><line x1=\"4.22\" y1=\"19.78\" x2=\"5.64\" y2=\"18.36\"></line><line x1=\"18.36\" y1=\"5.64\" x2=\"19.78\" y2=\"4.22\"></line></svg>";
+  text.innerText = isLight ? (currentLang === "fr" ? "Mode Sombre" : "Dark Mode") : (currentLang === "fr" ? "Mode Clair" : "Light Mode");
 }
 
 function scrollToTop() {

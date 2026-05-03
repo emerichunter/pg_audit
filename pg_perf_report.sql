@@ -1,4 +1,4 @@
-﻿\set quiet on
+\set quiet on
 \pset format unaligned
 \pset tuples_only on
 \pset border 0
@@ -67,6 +67,8 @@ SELECT $HTML$<!DOCTYPE html>
   /* Back to Top */
   #backToTop { position: fixed; bottom: 30px; right: 30px; width: 50px; height: 50px; background: var(--primary); color: white; border: none; border-radius: 50%; cursor: pointer; display: none; align-items: center; justify-content: center; font-size: 1.5rem; box-shadow: 0 4px 15px rgba(0,0,0,0.3); transition: all 0.3s; z-index: 1000; }
   #backToTop:hover { transform: translateY(-5px); background: var(--hover); }
+  .icon { width: 18px; height: 18px; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; vertical-align: middle; }
+  #backToTop .icon { stroke: white; width: 22px; height: 22px; }
 
   .timestamp { font-size: 0.85em; color: var(--text-muted); text-align: center; margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--border); font-weight: 500; }
 </style>
@@ -312,13 +314,11 @@ function toggleTheme() {
   const icon = document.getElementById("theme-icon");
   const text = document.getElementById("theme-text");
   body.classList.toggle("light-mode");
-  if (body.classList.contains("light-mode")) {
-    icon.innerHTML = <svg class="icon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>;
-    text.innerText = currentLang === "fr" ? "Mode Sombre" : "Dark Mode";
-  } else {
-    icon.innerHTML = <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>;
-    text.innerText = currentLang === "fr" ? "Mode Clair" : "Light Mode";
-  }
+  const isLight = body.classList.contains("light-mode");
+  icon.innerHTML = isLight
+    ? "<svg class=\"icon\" viewBox=\"0 0 24 24\"><path d=\"M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z\"></path></svg>"
+    : "<svg class=\"icon\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"5\"></circle><line x1=\"12\" y1=\"1\" x2=\"12\" y2=\"3\"></line><line x1=\"12\" y1=\"21\" x2=\"12\" y2=\"23\"></line><line x1=\"4.22\" y1=\"4.22\" x2=\"5.64\" y2=\"5.64\"></line><line x1=\"18.36\" y1=\"18.36\" x2=\"19.78\" y2=\"19.78\"></line><line x1=\"1\" y1=\"12\" x2=\"3\" y2=\"12\"></line><line x1=\"21\" y1=\"12\" x2=\"23\" y2=\"12\"></line><line x1=\"4.22\" y1=\"19.78\" x2=\"5.64\" y2=\"18.36\"></line><line x1=\"18.36\" y1=\"5.64\" x2=\"19.78\" y2=\"4.22\"></line></svg>";
+  text.innerText = isLight ? (currentLang === "fr" ? "Mode Sombre" : "Dark Mode") : (currentLang === "fr" ? "Mode Clair" : "Light Mode");
 }
 
 function scrollToTop() {
@@ -364,4 +364,5 @@ updateUI = function() {
 </body>
 </html>
 $HTML$;
+
 
