@@ -56,14 +56,6 @@ v_bloat AS (
     ) foo WHERE relpages > otta
 ),
 
-v_idx_redundant AS (
-    SELECT i.indexrelid::regclass::text as idx_candidate, j.indexrelid::regclass::text as idx_keep,
-    pg_size_pretty(pg_relation_size(i.indexrelid)) as size_saved
-    FROM pg_index i JOIN pg_index j ON i.indrelid = j.indrelid AND i.indexrelid <> j.indexrelid
-    WHERE string_to_array(i.indkey::text, ' ')::int2[] <@ string_to_array(j.indkey::text, ' ')::int2[]
-    AND NOT i.indisunique AND NOT i.indisprimary
-),
-
 v_idx_duplicate AS (
     SELECT n.nspname || '.' || c.relname as tbl, array_agg(indexrelid::regclass)::text as indexes, pg_size_pretty(SUM(pg_relation_size(indexrelid))::bigint) as size
     FROM pg_index i 

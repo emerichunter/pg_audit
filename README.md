@@ -26,11 +26,13 @@ A comprehensive performance dashboard optimized for **PostgreSQL 17**.
 
 ### 2. `ultimate_report.sql`
 The primary health and structural audit engine, consolidating features from legacy DBA toolkits into a single, high-fidelity report.
-- **Infrastructure**: WAL Archiving status, Replication lag, and active/inactive slots.
-- **Maintenance**: Wraparound risk (XID age), Autovacuum progress tracking, and sequence exhaustion alerts.
-- **Real-time Activity**: Locking trees (blockers/waiters) and live vacuum progress.
-- **Schema Optimization**: Alignment padding estimation, fragmented primary keys (UUID/Text), and denormalization pattern detection.
-- **Security**: Security Definer audit, role privilege checks, and credential validation.
+- **Compatibility**: Verified for PostgreSQL 12, 13, 14, 15, 16, 17, and **18**.
+- **Features**: Infrastructure tracking, maintenance metrics, real-time activity, and schema optimization.
+
+### 3. `ultimate_report_pg19.sql` (Experimental)
+A specialized version designed specifically for **PostgreSQL 19** enhancements.
+- **Advanced Observability**: Leverages `pg_stat_lock`, `pg_stat_recovery`, and `pg_stat_autovacuum_parallel`.
+- **Integrity Tracking**: Monitors data checksum status and online REPACK progress natively.
 
 ---
 
@@ -48,11 +50,14 @@ To generate a professional HTML report without SQL metadata or extraneous charac
 ### Example Commands:
 
 ```bash
-# Performance Report
-psql -A -t -q -d [database_name] -f pg17_perf_report.sql -o performance_report.html
+# Performance Report (PG17+)
+psql -A -t -q -d [db] -f pg17_perf_report.sql -o perf_report.html
 
-# Ultimate Health Audit
-psql -A -t -q -d [database_name] -f ultimate_report.sql -o audit_report.html
+# Ultimate Health Audit (PG12-18)
+psql -A -t -q -d [db] -f ultimate_report.sql -o audit_report.html
+
+# Experimental Audit (PG19+)
+psql -A -t -q -d [db] -f ultimate_report_pg19.sql -o audit_pg19.html
 ```
 
 ---
