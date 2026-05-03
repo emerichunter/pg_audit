@@ -1,0 +1,3486 @@
+﻿<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Rapport Performance PostgreSQL 17.9</title>
+<style>
+@import url(https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap);
+
+:root {
+--bg: #0f172a; --surface: #1e293b; --primary: #38bdf8; --text: #f8fafc; --text-muted: #94a3b8; --border: #334155; --hover: #0ea5e9;
+--h2-bg: rgba(255,255,255,0.02); --h2-border: #38bdf8;
+}
+
+body.light-mode {
+--bg: #f8fafc; --surface: #ffffff; --primary: #2563eb; --text: #1e293b; --text-muted: #64748b; --border: #e2e8f0; --hover: #1d4ed8;
+--h2-bg: #fff0f0; --h2-border: #c0392b;
+}
+
+body { font-family: Inter, system-ui, -apple-system, sans-serif; margin: 40px auto; max-width: 1400px; background-color: var(--bg); color: var(--text); line-height: 1.6; transition: background-color 0.3s, color 0.3s; }
+
+.header-container { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; }
+h1 { color: var(--text); font-size: 2.5rem; background: linear-gradient(135deg, var(--primary), #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; border-bottom: none; margin: 0; font-weight: 800; letter-spacing: -0.02em; }
+.pg-version-badge { background: var(--primary); color: #000; padding: 4px 12px; border-radius: 6px; font-weight: 800; font-size: 0.9rem; margin-left: 15px; vertical-align: middle; }
+
+/* Theme Switch */
+.theme-switch { background: var(--surface); border: 1px solid var(--border); padding: 8px 16px; border-radius: 50px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.85rem; color: var(--text); transition: all 0.3s; }
+.theme-switch:hover { border-color: var(--primary); box-shadow: 0 0 15px rgba(56,189,248,0.2); }
+
+h2 { color: var(--text); margin-top: 60px; font-size: 1.5rem; display: flex; align-items: center; gap: 12px; font-weight: 700; padding: 10px; border-radius: 8px; background: var(--h2-bg); }
+h2::before { content: ; display: block; width: 6px; height: 24px; background: var(--h2-border); border-radius: 4px; }
+body.light-mode h2 { color: #c0392b; }
+
+/* Navigation */
+.nav-menu { background: var(--surface); padding: 20px 25px; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 40px; }
+.nav-menu strong { color: var(--text-muted); margin-right: 10px; font-weight: 600; }
+.nav-menu a { text-decoration: none; color: var(--text); font-weight: 500; padding: 8px 16px; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); font-size: 0.9em; }
+.nav-menu a:hover { background: var(--primary); color: #fff; border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(56,189,248,0.3); }
+
+/* Tableaux */
+table { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 20px; background: var(--surface); border-radius: 12px; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); font-size: 0.95em; table-layout: fixed; border: 1px solid var(--border); overflow: hidden; }
+th { background: rgba(255,255,255,0.02); color: var(--text-muted); padding: 16px; text-align: left; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
+body.light-mode th { background: #34495e; color: #fff; }
+td { padding: 16px; border-bottom: 1px solid var(--border); vertical-align: top; font-family: JetBrains Mono, Fira Code, monospace; color: var(--text); }
+tr:last-child td { border-bottom: none; }
+tr { transition: background-color 0.2s; }
+tr:hover { background-color: rgba(255,255,255,0.03); }
+body.light-mode tr:hover { background-color: #f1f5f9; }
+
+/* --- CSS COLONNE REQUETE --- */
+td:first-child { width: 40%; cursor: pointer; color: var(--primary); transition: all 0.3s ease; vertical-align: middle; }
+.query-content { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; max-height: 1.5em; word-break: break-all; }
+.query-content:not(.expanded) br { display: none; }
+.query-content.expanded { -webkit-line-clamp: unset; max-height: none; background: rgba(56,189,248,0.05); border-left: 3px solid var(--primary); padding-left: 13px; color: var(--text); border-radius: 0 8px 8px 0; }
+body.light-mode .query-content.expanded { background: #fffbe6; border-left-color: #f59e0b; }
+td:first-child:hover .query-content:not(.expanded) { color: var(--hover); }
+
+/* Back to Top */
+#backToTop { position: fixed; bottom: 30px; right: 30px; width: 50px; height: 50px; background: var(--primary); color: white; border: none; border-radius: 50%; cursor: pointer; display: none; align-items: center; justify-content: center; font-size: 1.5rem; box-shadow: 0 4px 15px rgba(0,0,0,0.3); transition: all 0.3s; z-index: 1000; }
+#backToTop:hover { transform: translateY(-5px); background: var(--hover); }
+
+.timestamp { font-size: 0.85em; color: var(--text-muted); text-align: center; margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--border); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="header-container">
+<div>
+<h1 data-i18n="title">Rapport Performance PostgreSQL <span class="pg-version-badge">17.9</span></h1>
+</div>
+<div style="display: flex; gap: 10px;">
+<button class="theme-switch" onclick="toggleLanguage()">
+<span id="lang-icon"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg></span> <span id="lang-text">EN</span>
+</button>
+<button class="theme-switch" onclick="toggleTheme()">
+<span id="theme-icon"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg></span> <span id="theme-text">Mode Clair</span>
+</button>
+</div>
+</div>
+<div class="nav-menu">
+<strong data-i18n="nav_title">Navigation Rapide :</strong>
+<a href="#cpu" data-i18n="nav_cpu">1. Top CPU</a>
+<a href="#io" data-i18n="nav_io">2. Top IO</a>
+<a href="#planning" data-i18n="nav_plan">3. Planning Time</a>
+<a href="#wal" data-i18n="nav_wal">4. Top WAL</a>
+<a href="#freq" data-i18n="nav_freq">5. Frequence</a>
+<a href="#heavy" data-i18n="nav_heavy">6. Lourdes (Candidats Parallel)</a>
+<a href="#jitter" data-i18n="nav_jitter">7. Jitter</a>
+<a href="#temp" data-i18n="nav_temp">8. Temp Files</a>
+<a href="#cache" data-i18n="nav_cache">9. Cache Miss</a>
+<a href="#jit" data-i18n="nav_jit">10. JIT</a>
+<a href="#info" data-i18n="nav_info">11. Info Globales</a>
+</div>
+<h2 id="cpu" data-i18n="h2_cpu">1. Top Consommateurs CPU (Hors IO)</h2>
+<p data-i18n="p_cpu">Charge processeur pure (Total Time - IO Time).</p>
+<table border="0" class="data-table">
+  <tr>
+    <th align="center">Requete (Cliquer)</th>
+    <th align="center">Appels</th>
+    <th align="center">Total (ms)</th>
+    <th align="center">CPU Time (ms)</th>
+    <th align="center">PCT CPU</th>
+  </tr>
+</table>
+
+<h2 id="io" data-i18n="h2_io">2. Top IO (Latence Disque)</h2>
+<p data-i18n="p_io">Attente disque (lecture/ecriture).</p>
+<table border="0" class="data-table">
+  <tr>
+    <th align="center">Requete (Cliquer)</th>
+    <th align="center">Appels</th>
+    <th align="center">Moyenne (ms)</th>
+    <th align="center">IO Wait (ms)</th>
+    <th align="center">PCT IO</th>
+  </tr>
+</table>
+
+<h2 id="planning" data-i18n="h2_plan">3. Temps de Planification</h2>
+<p data-i18n="p_plan">Necessite track_planning = on.</p>
+<table border="0" class="data-table">
+  <tr>
+    <th align="center">Requete (Cliquer)</th>
+    <th align="center">Appels</th>
+    <th align="center">Total Plan (ms)</th>
+    <th align="center">Moy Plan (ms)</th>
+    <th align="center">PCT Planning</th>
+  </tr>
+</table>
+
+<h2 id="wal" data-i18n="h2_wal">4. Top Generateurs de WAL</h2>
+<p data-i18n="p_wal">Ecritures journaux (pression checkpoint).</p>
+<table border="0" class="data-table">
+  <tr>
+    <th align="center">Requete (Cliquer)</th>
+    <th align="center">Appels</th>
+    <th align="center">Total WAL</th>
+    <th align="center">Bytes / Appel</th>
+    <th align="center">WAL Records</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">CREATE EXTENSION pg_stat_statements</td>
+    <td align="right">1</td>
+    <td align="left">309 kB</td>
+    <td align="right">316062.00</td>
+    <td align="right">961</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">WITH RECURSIVE 
+<br />
+constants AS (SELECT current_setting($1)::numeric AS bs, $2 AS chunk_size),
+<br />
+
+<br />
+
+<br />
+v_unlogged AS (
+<br />
+    SELECT n.nspname || $3 || c.relname as object_name, 
+<br />
+    CASE WHEN c.relkind=$4 THEN $5 WHEN c.relkind=$6 THEN $7 ELSE $8 END as kind,
+<br />
+    pg_size_pretty(c.relpages::bigint*$9*$10) as size
+<br />
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+<br />
+    WHERE c.relpersistence = $11
+<br />
+),
+<br />
+
+<br />
+v_bloat AS (
+<br />
+    SELECT schemaname, tablename, 
+<br />
+    ROUND((CASE WHEN otta=$12 THEN $13 ELSE relpages::FLOAT/NULLIF(otta,$14) END)::NUMERIC,$15) AS tbloat,
+<br />
+    pg_size_pretty(((relpages-otta)*(SELECT bs FROM constants))::bigint) AS wasted
+<br />
+    FROM (
+<br />
+        SELECT schemaname, tablename, cc.relpages, CEIL((cc.reltuples*(($16+$17)+$18))/NULLIF((SELECT bs FROM constants)-$19, $20)) AS otta
+<br />
+        FROM pg_stats s JOIN pg_class cc ON cc.relname = s.tablename JOIN pg_namespace nn ON cc.relnamespace = nn.oid AND nn.nspname = s.schemaname
+<br />
+        WHERE s.schemaname NOT IN ($21, $22) 
+<br />
+        GROUP BY schemaname, tablename, cc.relpages, cc.reltuples
+<br />
+    ) foo WHERE relpages &gt; otta
+<br />
+),
+<br />
+
+<br />
+v_idx_redundant AS (
+<br />
+    SELECT i.indexrelid::regclass::text as idx_candidate, j.indexrelid::regclass::text as idx_keep,
+<br />
+    pg_size_pretty(pg_relation_size(i.indexrelid)) as size_saved
+<br />
+    FROM pg_index i JOIN pg_index j ON i.indrelid = j.indrelid AND i.indexrelid &lt;&gt; j.indexrelid
+<br />
+    WHERE string_to_array(i.indkey::text, $23)::int2[] &lt;@ string_to_array(j.indkey::text, $24)::int2[]
+<br />
+    AND NOT i.indisunique AND NOT i.indisprimary
+<br />
+),
+<br />
+
+<br />
+v_idx_duplicate AS (
+<br />
+    SELECT n.nspname || $25 || c.relname as tbl, array_agg(indexrelid::regclass)::text as indexes, pg_size_pretty(SUM(pg_relation_size(indexrelid))::bigint) as size
+<br />
+    FROM pg_index i 
+<br />
+    JOIN pg_class c ON c.oid = i.indrelid 
+<br />
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+<br />
+    GROUP BY n.nspname, c.relname, indrelid, indkey, indclass, indoption, indexprs, indpred HAVING count(*) &gt; $26
+<br />
+),
+<br />
+
+<br />
+v_idx_unused AS (
+<br />
+    SELECT schemaname, relname, indexrelname, pg_size_pretty(pg_relation_size(indexrelid)) as size
+<br />
+    FROM pg_stat_user_indexes WHERE idx_scan = $27 AND idx_tup_read = $28 AND schemaname NOT IN ($29, $30)
+<br />
+),
+<br />
+
+<br />
+v_idx_ineff AS (
+<br />
+    SELECT schemaname, relname, indexrelname, idx_scan, idx_tup_fetch, (idx_tup_read::numeric / NULLIF(idx_tup_fetch,$31))::numeric(10,1) as ratio
+<br />
+    FROM pg_stat_user_indexes WHERE idx_scan &gt; $32 AND (idx_tup_read::numeric / NULLIF(idx_tup_fetch,$33)) &gt; $34
+<br />
+),
+<br />
+
+<br />
+v_idx_invalid AS (
+<br />
+    SELECT n.nspname, c.relname FROM pg_index i JOIN pg_class c ON i.indexrelid=c.oid JOIN pg_namespace n ON c.relnamespace=n.oid
+<br />
+    WHERE NOT i.indisvalid
+<br />
+),
+<br />
+
+<br />
+v_missing_idx AS (
+<br />
+    SELECT schemaname, relname, seq_scan, seq_tup_read, idx_scan, 
+<br />
+    (seq_tup_read::numeric / NULLIF(idx_tup_fetch, $35))::numeric(10,2) as ratio
+<br />
+    FROM pg_stat_user_tables WHERE seq_scan &gt; $36 AND (seq_tup_read::numeric / NULLIF(idx_tup_fetch, $37)) &gt; $38
+<br />
+),
+<br />
+
+<br />
+v_fk_unindexed AS (
+<br />
+    SELECT n1.nspname || $39 || c1.relname as tbl, a1.attname as col 
+<br />
+    FROM pg_constraint t 
+<br />
+    JOIN pg_attribute a1 ON a1.attrelid=t.conrelid AND a1.attnum=t.conkey[$40] 
+<br />
+    JOIN pg_class c1 ON c1.oid=t.conrelid
+<br />
+    JOIN pg_namespace n1 ON n1.oid=c1.relnamespace
+<br />
+    WHERE t.contype=$41 AND NOT EXISTS (SELECT $42 FROM pg_index i WHERE i.indrelid=t.conrelid AND i.indkey[$43]=t.conkey[$44])
+<br />
+),
+<br />
+
+<br />
+v_fk_dup AS (
+<br />
+    SELECT conname, n.nspname || $45 || c.relname as tbl
+<br />
+    FROM pg_constraint t1 
+<br />
+    JOIN pg_class c ON t1.conrelid = c.oid
+<br />
+    JOIN pg_namespace n ON c.relnamespace = n.oid
+<br />
+    WHERE EXISTS (SELECT $46 FROM pg_constraint t2 WHERE t1.conrelid=t2.conrelid AND t1.conkey=t2.conkey AND t1.oid &lt;&gt; t2.oid AND t2.contype=$47) AND t1.contype=$48
+<br />
+),
+<br />
+
+<br />
+v_secu AS (
+<br />
+    SELECT rolname, rolsuper, CASE WHEN rolpassword IS NULL THEN $49 ELSE $50 END as pwd 
+<br />
+    FROM pg_roles WHERE rolname NOT LIKE $51
+<br />
+),
+<br />
+
+<br />
+v_funcs AS (
+<br />
+    SELECT n.nspname, p.proname, l.lanname, CASE WHEN p.prosecdef THEN $52 ELSE $53 END as sec
+<br />
+    FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid JOIN pg_language l ON p.prolang=l.oid
+<br />
+    WHERE n.nspname NOT IN ($54,$55) AND p.prosecdef
+<br />
+),
+<br />
+
+<br />
+v_seq AS (
+<br />
+    SELECT schemaname, sequencename, last_value, max_value, 
+<br />
+    round((last_value::numeric / NULLIF(max_value::numeric,$56)) * $57, $58) as pct
+<br />
+    FROM pg_sequences WHERE (last_value::numeric / NULLIF(max_value::numeric,$59)) &gt; $60
+<br />
+),
+<br />
+
+<br />
+v_empty_tbl AS (SELECT schemaname, relname FROM pg_stat_user_tables WHERE n_live_tup = $61),
+<br />
+
+<br />
+v_unused_tbl AS (SELECT schemaname, relname FROM pg_stat_user_tables WHERE (seq_tup_read + idx_tup_fetch + n_tup_ins + n_tup_upd + n_tup_del) = $62),
+<br />
+
+<br />
+v_single_col AS (
+<br />
+    SELECT table_schema, table_name FROM information_schema.columns 
+<br />
+    WHERE table_schema NOT IN ($63,$64) GROUP BY table_schema, table_name HAVING count(*) = $65
+<br />
+),
+<br />
+
+<br />
+v_useless_col AS (
+<br />
+    SELECT schemaname, tablename as relname, attname, null_frac 
+<br />
+    FROM pg_stats WHERE null_frac &gt; $66 AND schemaname NOT IN ($67,$68)
+<br />
+),
+<br />
+
+<br />
+v_av_tune AS (
+<br />
+    SELECT schemaname, relname, n_dead_tup, last_autovacuum 
+<br />
+    FROM pg_stat_user_tables 
+<br />
+    WHERE n_dead_tup &gt; (current_setting($69)::int + current_setting($70)::float * n_live_tup)
+<br />
+),
+<br />
+
+<br />
+v_slots AS (
+<br />
+    SELECT slot_name, active, restart_lsn FROM pg_replication_slots WHERE NOT active
+<br />
+),
+<br />
+
+<br />
+v_denorm AS (
+<br />
+    SELECT table_schema, table_name, substring(column_name FROM $71) as pattern, count(*) as cnt 
+<br />
+    FROM information_schema.columns WHERE column_name ~ $72 AND table_schema NOT IN ($73,$74)
+<br />
+    GROUP BY table_schema, table_name, substring(column_name FROM '^(.*)[0-9]+$') HAVING count(*) &gt; $75
+<br />
+),
+<br />
+
+<br />
+v_frag AS (
+<br />
+    SELECT n.nspname || $76 || t.relname as relname, a.attname, ty.typname 
+<br />
+    FROM pg_index i 
+<br />
+    JOIN pg_class t ON t.oid=i.indrelid 
+<br />
+    JOIN pg_namespace n ON t.relnamespace = n.oid
+<br />
+    JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=ANY(i.indkey) 
+<br />
+    JOIN pg_type ty ON a.atttypid=ty.oid
+<br />
+    WHERE i.indisprimary AND ty.typname IN ($77,$78,$79)
+<br />
+),
+<br />
+
+<br />
+v_too_many_idx AS (
+<br />
+    SELECT schemaname, relname, count(*) as cnt FROM pg_stat_user_indexes GROUP BY schemaname, relname HAVING count(*) &gt; $80
+<br />
+),
+<br />
+
+<br />
+html AS (
+<br />
+    SELECT $81 as val
+<br />
+    
+<br />
+    UNION ALL SELECT $82
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($83||object_name||$84||size||$85,$86) FROM v_unlogged),$87)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($88||schemaname||$89||tablename||$90||wasted||$91||tbloat||$92,$93) FROM v_bloat LIMIT $94),$95)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($96||relname||$97||typname||$98,$99) FROM v_frag),$100)
+<br />
+    UNION ALL SELECT $101
+<br />
+
+<br />
+    UNION ALL SELECT $102
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($103||tbl||$104||indexes||$105,$106) FROM v_idx_duplicate),$107)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($108||idx_candidate||$109||idx_keep||$110||size_saved||$111,$112) FROM v_idx_redundant),$113)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($114||schemaname||$115||relname||$116||indexrelname||$117||ratio||$118,$119) FROM v_idx_ineff),$120)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($121||schemaname||$122||relname||$123||indexrelname||$124||size||$125,$126) FROM v_idx_unused LIMIT $127),$128)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($129||schemaname||$130||relname||$131||cnt||$132,$133) FROM v_too_many_idx),$134)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($135||nspname||$136||relname||$137,$138) FROM v_idx_invalid),$139)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($140||schemaname||$141||relname||$142||seq_scan||$143,$144) FROM v_missing_idx LIMIT $145),$146)
+<br />
+    UNION ALL SELECT $147
+<br />
+
+<br />
+    UNION ALL SELECT $148
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($149||tbl||$150||col||$151,$152) FROM v_fk_unindexed),$153)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($154||tbl||$155||conname||$156,$157) FROM v_fk_dup),$158)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($159||table_schema||$160||table_name||$161||pattern||$162||cnt||$163,$164) FROM v_denorm),$165)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($166||schemaname||$167||relname||$168,$169) FROM v_empty_tbl LIMIT $170),$171)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($172||schemaname||$173||relname||$174,$175) FROM v_unused_tbl LIMIT $176),$177)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($178||table_schema||$179||table_name||$180,$181) FROM v_single_col),$182)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($183||schemaname||$184||relname||$185||attname||$186||(null_frac*$187)::int||$188,$189) FROM v_useless_col),$190)
+<br />
+    UNION ALL SELECT $191
+<br />
+
+<br />
+    UNION ALL SELECT $192
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($193||schemaname||$194||sequencename||$195||pct||$196,$197) FROM v_seq),$198)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($199||schemaname||$200||relname||$201||n_dead_tup||$202,$203) FROM v_av_tune),$204)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($205||slot_name||$206||restart_lsn||$207,$208) FROM v_slots),$209)
+<br />
+    UNION ALL SELECT $210
+<br />
+
+<br />
+    UNION ALL SELECT $211
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($212||rolname||$213||pwd||$214||rolsuper||$215,$216) FROM v_secu),$217)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($218||nspname||$219||proname||$220,$221) FROM v_funcs),$222)
+<br />
+    UNION ALL SELECT $223
+<br />
+
+<br />
+    UNION ALL SELECT $224
+<br />
+)
+<br />
+SELECT string_agg(val, $225) FROM html</td>
+    <td align="right">1</td>
+    <td align="left">218 bytes</td>
+    <td align="right">218.00</td>
+    <td align="right">2</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT current_setting($1) as pg_version</td>
+    <td align="right">5</td>
+    <td align="left">0 bytes</td>
+    <td align="right">0.00</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round(stddev_exec_time::numeric, $2) AS &quot;Ecart-Type (ms)&quot;,
+<br />
+    round((stddev_exec_time / NULLIF(mean_exec_time, $3))::numeric, $4) AS &quot;Ratio Var.&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE calls &gt; $5 
+<br />
+  AND stddev_exec_time &gt; mean_exec_time
+<br />
+ORDER BY stddev_exec_time DESC 
+<br />
+LIMIT $6</td>
+    <td align="right">6</td>
+    <td align="left">0 bytes</td>
+    <td align="right">0.00</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round((jit_generation_time + jit_inlining_time + jit_optimization_time + jit_emission_time)::numeric, $2) AS &quot;JIT Overhead (ms)&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE jit_functions &gt; $3
+<br />
+ORDER BY (jit_generation_time + jit_inlining_time + jit_optimization_time + jit_emission_time) DESC 
+<br />
+LIMIT $4</td>
+    <td align="right">6</td>
+    <td align="left">0 bytes</td>
+    <td align="right">0.00</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT
+<br />
+    query AS &quot;Requete (Cliquer)&quot;, 
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round((shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)::numeric, $2) AS &quot;IO Wait (ms)&quot;,
+<br />
+    round(($3 * (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) / NULLIF(total_exec_time, $4))::numeric, $5) AS &quot;PCT IO&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) &gt; $6
+<br />
+ORDER BY (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) DESC 
+<br />
+LIMIT $7</td>
+    <td align="right">7</td>
+    <td align="left">0 bytes</td>
+    <td align="right">0.00</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(($1 * shared_blks_hit / NULLIF(shared_blks_hit + shared_blks_read, $2)), $3) AS &quot;Cache Hit PCT&quot;,
+<br />
+    (shared_blks_dirtied + local_blks_dirtied) AS &quot;Blocks Salis&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY (shared_blks_hit + shared_blks_read) DESC
+<br />
+LIMIT $4</td>
+    <td align="right">6</td>
+    <td align="left">0 bytes</td>
+    <td align="right">0.00</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(total_plan_time::numeric, $1) AS &quot;Total Plan (ms)&quot;,
+<br />
+    round(mean_plan_time::numeric, $2) AS &quot;Moy Plan (ms)&quot;,
+<br />
+    round((total_plan_time / NULLIF(total_exec_time + total_plan_time, $3) * $4)::numeric, $5) AS &quot;PCT Planning&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE plans &gt; $6
+<br />
+ORDER BY total_plan_time DESC
+<br />
+LIMIT $7</td>
+    <td align="right">7</td>
+    <td align="left">0 bytes</td>
+    <td align="right">0.00</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">WITH RECURSIVE 
+<br />
+constants AS (SELECT current_setting($1)::numeric AS bs, $2 AS chunk_size),
+<br />
+
+<br />
+/* --- DATA GATHERING --- */
+<br />
+v_ver AS (
+<br />
+    SELECT current_setting($3) as ver, 
+<br />
+    substring(current_setting($4) from $5)::int as major_ver
+<br />
+),
+<br />
+
+<br />
+v_ext AS (
+<br />
+    SELECT name, installed_version, default_version, 
+<br />
+    CASE WHEN installed_version &lt;&gt; default_version THEN $6 ELSE $7 END as status
+<br />
+    FROM pg_available_extensions WHERE installed_version IS NOT NULL
+<br />
+),
+<br />
+
+<br />
+v_db_info AS (
+<br />
+    SELECT datname, pg_encoding_to_char(encoding) as enc, datcollate, pg_size_pretty(pg_database_size(datname)) as size
+<br />
+    FROM pg_database WHERE datallowconn AND NOT datistemplate
+<br />
+),
+<br />
+
+<br />
+v_archiving AS (
+<br />
+  SELECT 
+<br />
+    CASE WHEN NOT has_table_privilege($8, $9) THEN $10 
+<br />
+         ELSE (SELECT CASE WHEN archived_count IS NULL THEN $11 WHEN failed_count &gt; $12 THEN $13 ELSE $14 END FROM pg_stat_archiver)
+<br />
+    END as status,
+<br />
+    CASE WHEN has_table_privilege($15, $16) THEN (SELECT COALESCE(archived_count, $17) FROM pg_stat_archiver) ELSE $18 END as archived_count,
+<br />
+    CASE WHEN has_table_privilege($19, $20) THEN (SELECT COALESCE(failed_count, $21) FROM pg_stat_archiver) ELSE $22 END as failed_count,
+<br />
+    CASE WHEN has_table_privilege($23, $24) THEN (SELECT COALESCE(to_char(last_failed_time, $25), $26) FROM pg_stat_archiver) ELSE $27 END as last_fail
+<br />
+),
+<br />
+
+<br />
+v_repl AS (
+<br />
+  SELECT 
+<br />
+    CASE 
+<br />
+      WHEN pg_is_in_recovery() THEN $28
+<br />
+      WHEN (SELECT COUNT(*) FROM pg_stat_replication) = $29 THEN $30
+<br />
+      ELSE $31
+<br />
+    END as status,
+<br />
+    CASE 
+<br />
+      WHEN pg_is_in_recovery() THEN $32
+<br />
+      ELSE (
+<br />
+        SELECT COALESCE(
+<br />
+          STRING_AGG(application_name || $33 || state || $34 || 
+<br />
+            pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn)), $35),
+<br />
+          $36
+<br />
+        )
+<br />
+        FROM pg_stat_replication
+<br />
+      )
+<br />
+    END as details
+<br />
+),
+<br />
+
+<br />
+v_slots AS (
+<br />
+  SELECT 
+<br />
+    slot_name,
+<br />
+    slot_type,
+<br />
+    CASE WHEN active THEN $37 ELSE $38 END as status,
+<br />
+    pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) as wal_retained,
+<br />
+    CASE WHEN NOT active AND pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) &gt; $39 THEN $40
+<br />
+         WHEN NOT active THEN $41
+<br />
+         ELSE $42
+<br />
+    END as risk
+<br />
+  FROM pg_replication_slots
+<br />
+  WHERE (SELECT has_table_privilege($43, $44))
+<br />
+),
+<br />
+
+<br />
+v_bloat AS (
+<br />
+    SELECT schemaname, tablename, 
+<br />
+    ROUND((CASE WHEN otta=$45 THEN $46 ELSE relpages::FLOAT/NULLIF(otta,$47) END)::NUMERIC,$48) AS tbloat,
+<br />
+    pg_size_pretty(((relpages-otta)*(SELECT bs FROM constants))::bigint) AS wasted
+<br />
+    FROM (
+<br />
+        SELECT schemaname, tablename, cc.relpages, CEIL((cc.reltuples*(($49+$50)+$51))/NULLIF((SELECT bs FROM constants)-$52, $53)) AS otta
+<br />
+        FROM pg_stats s JOIN pg_class cc ON cc.relname = s.tablename JOIN pg_namespace nn ON cc.relnamespace = nn.oid AND nn.nspname = s.schemaname
+<br />
+        WHERE s.schemaname NOT IN ($54, $55) 
+<br />
+        GROUP BY schemaname, tablename, cc.relpages, cc.reltuples
+<br />
+    ) foo WHERE relpages &gt; otta
+<br />
+),
+<br />
+
+<br />
+v_idx_duplicate AS (
+<br />
+    SELECT n.nspname || $56 || c.relname as tbl, array_agg(indexrelid::regclass)::text as indexes, pg_size_pretty(SUM(pg_relation_size(indexrelid))::bigint) as size
+<br />
+    FROM pg_index i 
+<br />
+    JOIN pg_class c ON c.oid = i.indrelid 
+<br />
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+<br />
+    GROUP BY n.nspname, c.relname, indrelid, indkey, indclass, indoption, indexprs, indpred HAVING count(*) &gt; $57
+<br />
+),
+<br />
+
+<br />
+v_idx_ineff AS (
+<br />
+  SELECT schemaname, relname, indexrelname, idx_scan, 
+<br />
+    ROUND((idx_tup_read::numeric / NULLIF(idx_tup_fetch,$58)), $59) as ratio,
+<br />
+    pg_size_pretty(pg_relation_size(indexrelid)) as idx_size
+<br />
+  FROM pg_stat_user_indexes 
+<br />
+  WHERE idx_scan &gt; $60 AND (idx_tup_read::numeric / NULLIF(idx_tup_fetch,$61)) &gt; $62
+<br />
+),
+<br />
+
+<br />
+v_missing_idx AS (
+<br />
+  SELECT schemaname, relname, 
+<br />
+    pg_size_pretty(pg_total_relation_size(relid)) as table_size,
+<br />
+    seq_scan, seq_tup_read, idx_scan
+<br />
+  FROM pg_stat_user_tables 
+<br />
+  WHERE schemaname NOT IN ($63, $64)
+<br />
+    AND pg_total_relation_size(relid) &gt; $65 -- 10MB
+<br />
+    AND seq_scan &gt; $66 
+<br />
+    AND seq_tup_read &gt; $67
+<br />
+),
+<br />
+
+<br />
+v_fk_unindexed AS (
+<br />
+    SELECT n1.nspname || $68 || c1.relname as tbl, a1.attname as col 
+<br />
+    FROM pg_constraint t 
+<br />
+    JOIN pg_attribute a1 ON a1.attrelid=t.conrelid AND a1.attnum=t.conkey[$69] 
+<br />
+    JOIN pg_class c1 ON c1.oid=t.conrelid
+<br />
+    JOIN pg_namespace n1 ON n1.oid=c1.relnamespace
+<br />
+    WHERE t.contype=$70 AND NOT EXISTS (SELECT $71 FROM pg_index i WHERE i.indrelid=t.conrelid AND i.indkey[$72]=t.conkey[$73])
+<br />
+),
+<br />
+
+<br />
+v_wrap AS (
+<br />
+  SELECT datname, age(datfrozenxid) as xid_age, 
+<br />
+    ROUND(($74 * age(datfrozenxid) / NULLIF(current_setting($75)::bigint, $76))::numeric, $77) as pct,
+<br />
+    CASE WHEN age(datfrozenxid) &gt; ($78 * current_setting($79)::bigint) THEN $80
+<br />
+         WHEN age(datfrozenxid) &gt; ($81 * current_setting($82)::bigint) THEN $83
+<br />
+         ELSE $84
+<br />
+    END as status
+<br />
+  FROM pg_database 
+<br />
+  WHERE datallowconn AND age(datfrozenxid) &gt; $85
+<br />
+),
+<br />
+
+<br />
+v_locks AS (
+<br />
+  SELECT pid, usename, backend_type, 
+<br />
+    pg_blocking_pids(pid)::text as blockers,
+<br />
+    wait_event_type, wait_event,
+<br />
+    CASE WHEN state = $86 THEN $87
+<br />
+         WHEN wait_event_type IS NOT NULL THEN $88
+<br />
+         ELSE state
+<br />
+    END as actual_status,
+<br />
+    EXTRACT($89 FROM (now() - query_start))::int as wait_secs,
+<br />
+    substring(query, $90, $91) as query_snippet
+<br />
+  FROM pg_stat_activity 
+<br />
+  WHERE pg_blocking_pids(pid) &lt;&gt; $92 OR (state = $93 AND (now() - xact_start) &gt; interval $94)
+<br />
+),
+<br />
+
+<br />
+v_secu AS (
+<br />
+  SELECT rolname,
+<br />
+    CASE WHEN rolsuper THEN $95 ELSE $96 END as role_type,
+<br />
+    CASE WHEN NOT rolcanlogin THEN $97 
+<br />
+         WHEN rolpassword IS NULL THEN $98
+<br />
+         WHEN rolpassword LIKE $99 THEN $100
+<br />
+         WHEN rolpassword LIKE $101 THEN $102
+<br />
+         ELSE $103
+<br />
+    END as pwd_status,
+<br />
+    CASE WHEN rolsuper OR rolcreaterole OR rolreplication THEN $104 ELSE $105 END as risk
+<br />
+  FROM pg_roles 
+<br />
+  WHERE rolname NOT LIKE $106
+<br />
+),
+<br />
+
+<br />
+v_seq AS (
+<br />
+  SELECT schemaname, sequencename, last_value, max_value, 
+<br />
+    ROUND((last_value::numeric / NULLIF(max_value::numeric,$107)) * $108, $109) as pct_used,
+<br />
+    CASE WHEN last_value::numeric / NULLIF(max_value::numeric, $110) &gt; $111 THEN $112
+<br />
+         ELSE $113
+<br />
+    END as status
+<br />
+  FROM pg_sequences 
+<br />
+  WHERE (last_value::numeric / NULLIF(max_value::numeric,$114)) &gt; $115
+<br />
+),
+<br />
+
+<br />
+v_settings AS (
+<br />
+  SELECT name, setting, unit,
+<br />
+    CASE WHEN name = $116 AND setting = $117 THEN $118
+<br />
+         WHEN name = $119 AND setting = $120 THEN $121
+<br />
+         ELSE $122
+<br />
+    END as risk
+<br />
+  FROM pg_settings
+<br />
+  WHERE name IN ($123, $124, $125, $126, $127)
+<br />
+),
+<br />
+
+<br />
+v_buffer_health AS (
+<br />
+  SELECT 
+<br />
+    ROUND(sum(heap_blks_hit)::numeric / NULLIF(sum(heap_blks_hit) + sum(heap_blks_read), $128) * $129, $130) as hit_ratio_pct
+<br />
+  FROM pg_statio_user_tables
+<br />
+),
+<br />
+
+<br />
+/* --- HTML TEMPLATE --- */
+<br />
+html AS (
+<br />
+    SELECT $131 || (SELECT ver FROM v_ver) || $132 || to_char(now(), $133) || $134 || to_char(now(), $135) || $136 || (SELECT ver FROM v_ver) || $137 as val
+<br />
+    
+<br />
+    UNION ALL SELECT $138
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($139||name||$140||installed_version||$141||status||$142,$143) FROM v_ext),$144)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($145||datname||$146||size||$147||enc||$148,$149) FROM v_db_info),$150)
+<br />
+    UNION ALL SELECT $151||hit_ratio_pct||$152 FROM v_buffer_health
+<br />
+    UNION ALL SELECT $153
+<br />
+    
+<br />
+    UNION ALL SELECT $154
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($155||CASE WHEN status=$156 THEN $157 ELSE $158 END||$159||status||$160||archived_count||$161||failed_count||$162,$163) FROM v_archiving),$164)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($165||status||$166||details||$167,$168) FROM v_repl),$169)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($170||CASE WHEN risk=$171 THEN $172 ELSE $173 END||$174||status||$175||slot_name||$176||wal_retained||$177||risk||$178,$179) FROM v_slots),$180)
+<br />
+    UNION ALL SELECT $181
+<br />
+    
+<br />
+    UNION ALL SELECT $182
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($183||schemaname||$184||tablename||$185||wasted||$186||tbloat||$187,$188) FROM v_bloat LIMIT $189),$190)
+<br />
+    UNION ALL SELECT $191
+<br />
+    
+<br />
+    UNION ALL SELECT $192
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($193||tbl||$194||indexes||$195||size||$196,$197) FROM v_idx_duplicate),$198)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($199||schemaname||$200||relname||$201||ratio||$202||idx_size||$203,$204) FROM v_idx_ineff),$205)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($206||schemaname||$207||relname||$208||seq_scan||$209||table_size||$210,$211) FROM v_missing_idx LIMIT $212),$213)
+<br />
+    UNION ALL SELECT $214
+<br />
+    
+<br />
+    UNION ALL SELECT $215
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($216||CASE WHEN status=$217 THEN $218 ELSE $219 END||$220||datname||$221||pct||$222||status||$223,$224) FROM v_wrap),$225)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($226||CASE WHEN status=$227 THEN $228 ELSE $229 END||$230||schemaname||$231||sequencename||$232||pct_used||$233,$234) FROM v_seq),$235)
+<br />
+    UNION ALL SELECT $236
+<br />
+    
+<br />
+    UNION ALL SELECT $237
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($238||pid||$239||usename||$240||actual_status||$241||wait_secs||$242||blockers||$243||query_snippet||$244,$245) FROM v_locks),$246)
+<br />
+    UNION ALL SELECT $247
+<br />
+    
+<br />
+    UNION ALL SELECT $248
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($249||role_type||$250||rolname||$251||pwd_status||$252||risk||$253,$254) FROM v_secu),$255)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($256||name||$257||setting||$258||risk||$259,$260) FROM v_settings),$261)
+<br />
+    UNION ALL SELECT $262
+<br />
+    
+<br />
+    UNION ALL SELECT $263
+<br />
+)
+<br />
+SELECT string_agg(val, $264) FROM html</td>
+    <td align="right">4</td>
+    <td align="left">0 bytes</td>
+    <td align="right">0.00</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(total_exec_time::numeric, $1) AS &quot;Total (ms)&quot;,
+<br />
+    round((total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time))::numeric, $2) AS &quot;CPU Time (ms)&quot;,
+<br />
+    round(($3 * (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) / NULLIF(total_exec_time, $4))::numeric, $5) AS &quot;PCT CPU&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE calls &gt; $6
+<br />
+ORDER BY (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) DESC 
+<br />
+LIMIT $7</td>
+    <td align="right">7</td>
+    <td align="left">0 bytes</td>
+    <td align="right">0.00</td>
+    <td align="right">0</td>
+  </tr>
+</table>
+
+<h2 id="freq" data-i18n="h2_freq">5. Haute Frequence</h2>
+<p data-i18n="p_freq">Requetes rapides mais massives.</p>
+<table border="0" class="data-table">
+  <tr>
+    <th align="center">Requete (Cliquer)</th>
+    <th align="center">Appels</th>
+    <th align="center">Moyenne (ms)</th>
+    <th align="center">Total (ms)</th>
+    <th align="center">PCT Charge</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(total_exec_time::numeric, $1) AS &quot;Total (ms)&quot;,
+<br />
+    round((total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time))::numeric, $2) AS &quot;CPU Time (ms)&quot;,
+<br />
+    round(($3 * (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) / NULLIF(total_exec_time, $4))::numeric, $5) AS &quot;PCT CPU&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE calls &gt; $6
+<br />
+ORDER BY (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) DESC 
+<br />
+LIMIT $7</td>
+    <td align="right">7</td>
+    <td align="right">0.66</td>
+    <td align="right">4.64</td>
+    <td align="right">0.54</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(total_plan_time::numeric, $1) AS &quot;Total Plan (ms)&quot;,
+<br />
+    round(mean_plan_time::numeric, $2) AS &quot;Moy Plan (ms)&quot;,
+<br />
+    round((total_plan_time / NULLIF(total_exec_time + total_plan_time, $3) * $4)::numeric, $5) AS &quot;PCT Planning&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE plans &gt; $6
+<br />
+ORDER BY total_plan_time DESC
+<br />
+LIMIT $7</td>
+    <td align="right">7</td>
+    <td align="right">0.27</td>
+    <td align="right">1.87</td>
+    <td align="right">0.22</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    pg_size_pretty(wal_bytes) AS &quot;Total WAL&quot;,
+<br />
+    round((wal_bytes / NULLIF(calls, $1))::numeric, $2) AS &quot;Bytes / Appel&quot;,
+<br />
+    wal_records AS &quot;WAL Records&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY wal_bytes DESC 
+<br />
+LIMIT $3</td>
+    <td align="right">7</td>
+    <td align="right">0.57</td>
+    <td align="right">4.02</td>
+    <td align="right">0.46</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT
+<br />
+    query AS &quot;Requete (Cliquer)&quot;, 
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round((shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)::numeric, $2) AS &quot;IO Wait (ms)&quot;,
+<br />
+    round(($3 * (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) / NULLIF(total_exec_time, $4))::numeric, $5) AS &quot;PCT IO&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) &gt; $6
+<br />
+ORDER BY (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) DESC 
+<br />
+LIMIT $7</td>
+    <td align="right">7</td>
+    <td align="right">0.33</td>
+    <td align="right">2.31</td>
+    <td align="right">0.27</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(total_exec_time::numeric, $1) AS &quot;Total Time (ms)&quot;,
+<br />
+    round(mean_exec_time::numeric, $2) AS &quot;Moyenne (ms)&quot;,
+<br />
+    rows AS &quot;Lignes Totales&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY total_exec_time DESC 
+<br />
+LIMIT $3</td>
+    <td align="right">6</td>
+    <td align="right">0.58</td>
+    <td align="right">3.45</td>
+    <td align="right">0.40</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    dealloc AS &quot;Deallocations&quot;, 
+<br />
+    stats_reset AS &quot;Dernier Reset&quot;
+<br />
+FROM pg_stat_statements_info</td>
+    <td align="right">6</td>
+    <td align="right">0.10</td>
+    <td align="right">0.59</td>
+    <td align="right">0.07</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(($1 * shared_blks_hit / NULLIF(shared_blks_hit + shared_blks_read, $2)), $3) AS &quot;Cache Hit PCT&quot;,
+<br />
+    (shared_blks_dirtied + local_blks_dirtied) AS &quot;Blocks Salis&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY (shared_blks_hit + shared_blks_read) DESC
+<br />
+LIMIT $4</td>
+    <td align="right">6</td>
+    <td align="right">0.40</td>
+    <td align="right">2.39</td>
+    <td align="right">0.28</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round(total_exec_time::numeric, $2) AS &quot;Total (ms)&quot;,
+<br />
+    round(($3 * total_exec_time / SUM(total_exec_time) OVER())::numeric, $4) AS &quot;PCT Charge&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY calls DESC 
+<br />
+LIMIT $5</td>
+    <td align="right">6</td>
+    <td align="right">0.59</td>
+    <td align="right">3.52</td>
+    <td align="right">0.41</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round(stddev_exec_time::numeric, $2) AS &quot;Ecart-Type (ms)&quot;,
+<br />
+    round((stddev_exec_time / NULLIF(mean_exec_time, $3))::numeric, $4) AS &quot;Ratio Var.&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE calls &gt; $5 
+<br />
+  AND stddev_exec_time &gt; mean_exec_time
+<br />
+ORDER BY stddev_exec_time DESC 
+<br />
+LIMIT $6</td>
+    <td align="right">6</td>
+    <td align="right">0.31</td>
+    <td align="right">1.86</td>
+    <td align="right">0.21</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round((jit_generation_time + jit_inlining_time + jit_optimization_time + jit_emission_time)::numeric, $2) AS &quot;JIT Overhead (ms)&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE jit_functions &gt; $3
+<br />
+ORDER BY (jit_generation_time + jit_inlining_time + jit_optimization_time + jit_emission_time) DESC 
+<br />
+LIMIT $4</td>
+    <td align="right">6</td>
+    <td align="right">0.32</td>
+    <td align="right">1.91</td>
+    <td align="right">0.22</td>
+  </tr>
+</table>
+
+<h2 id="heavy" data-i18n="h2_heavy">6. Lourdes (Candidats Parallelisme)</h2>
+<p data-i18n="p_heavy">Les plus longues en temps absolu. Candidats potentiels pour parallelisme.</p>
+<table border="0" class="data-table">
+  <tr>
+    <th align="center">Requete (Cliquer)</th>
+    <th align="center">Appels</th>
+    <th align="center">Total Time (ms)</th>
+    <th align="center">Moyenne (ms)</th>
+    <th align="center">Lignes Totales</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">WITH RECURSIVE 
+<br />
+constants AS (SELECT current_setting($1)::numeric AS bs, $2 AS chunk_size),
+<br />
+
+<br />
+/* --- DATA GATHERING --- */
+<br />
+v_ver AS (
+<br />
+    SELECT current_setting($3) as ver, 
+<br />
+    substring(current_setting($4) from $5)::int as major_ver
+<br />
+),
+<br />
+
+<br />
+v_ext AS (
+<br />
+    SELECT name, installed_version, default_version, 
+<br />
+    CASE WHEN installed_version &lt;&gt; default_version THEN $6 ELSE $7 END as status
+<br />
+    FROM pg_available_extensions WHERE installed_version IS NOT NULL
+<br />
+),
+<br />
+
+<br />
+v_db_info AS (
+<br />
+    SELECT datname, pg_encoding_to_char(encoding) as enc, datcollate, pg_size_pretty(pg_database_size(datname)) as size
+<br />
+    FROM pg_database WHERE datallowconn AND NOT datistemplate
+<br />
+),
+<br />
+
+<br />
+v_archiving AS (
+<br />
+  SELECT 
+<br />
+    CASE WHEN NOT has_table_privilege($8, $9) THEN $10 
+<br />
+         ELSE (SELECT CASE WHEN archived_count IS NULL THEN $11 WHEN failed_count &gt; $12 THEN $13 ELSE $14 END FROM pg_stat_archiver)
+<br />
+    END as status,
+<br />
+    CASE WHEN has_table_privilege($15, $16) THEN (SELECT COALESCE(archived_count, $17) FROM pg_stat_archiver) ELSE $18 END as archived_count,
+<br />
+    CASE WHEN has_table_privilege($19, $20) THEN (SELECT COALESCE(failed_count, $21) FROM pg_stat_archiver) ELSE $22 END as failed_count,
+<br />
+    CASE WHEN has_table_privilege($23, $24) THEN (SELECT COALESCE(to_char(last_failed_time, $25), $26) FROM pg_stat_archiver) ELSE $27 END as last_fail
+<br />
+),
+<br />
+
+<br />
+v_repl AS (
+<br />
+  SELECT 
+<br />
+    CASE 
+<br />
+      WHEN pg_is_in_recovery() THEN $28
+<br />
+      WHEN (SELECT COUNT(*) FROM pg_stat_replication) = $29 THEN $30
+<br />
+      ELSE $31
+<br />
+    END as status,
+<br />
+    CASE 
+<br />
+      WHEN pg_is_in_recovery() THEN $32
+<br />
+      ELSE (
+<br />
+        SELECT COALESCE(
+<br />
+          STRING_AGG(application_name || $33 || state || $34 || 
+<br />
+            pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn)), $35),
+<br />
+          $36
+<br />
+        )
+<br />
+        FROM pg_stat_replication
+<br />
+      )
+<br />
+    END as details
+<br />
+),
+<br />
+
+<br />
+v_slots AS (
+<br />
+  SELECT 
+<br />
+    slot_name,
+<br />
+    slot_type,
+<br />
+    CASE WHEN active THEN $37 ELSE $38 END as status,
+<br />
+    pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) as wal_retained,
+<br />
+    CASE WHEN NOT active AND pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) &gt; $39 THEN $40
+<br />
+         WHEN NOT active THEN $41
+<br />
+         ELSE $42
+<br />
+    END as risk
+<br />
+  FROM pg_replication_slots
+<br />
+  WHERE (SELECT has_table_privilege($43, $44))
+<br />
+),
+<br />
+
+<br />
+v_bloat AS (
+<br />
+    SELECT schemaname, tablename, 
+<br />
+    ROUND((CASE WHEN otta=$45 THEN $46 ELSE relpages::FLOAT/NULLIF(otta,$47) END)::NUMERIC,$48) AS tbloat,
+<br />
+    pg_size_pretty(((relpages-otta)*(SELECT bs FROM constants))::bigint) AS wasted
+<br />
+    FROM (
+<br />
+        SELECT schemaname, tablename, cc.relpages, CEIL((cc.reltuples*(($49+$50)+$51))/NULLIF((SELECT bs FROM constants)-$52, $53)) AS otta
+<br />
+        FROM pg_stats s JOIN pg_class cc ON cc.relname = s.tablename JOIN pg_namespace nn ON cc.relnamespace = nn.oid AND nn.nspname = s.schemaname
+<br />
+        WHERE s.schemaname NOT IN ($54, $55) 
+<br />
+        GROUP BY schemaname, tablename, cc.relpages, cc.reltuples
+<br />
+    ) foo WHERE relpages &gt; otta
+<br />
+),
+<br />
+
+<br />
+v_idx_duplicate AS (
+<br />
+    SELECT n.nspname || $56 || c.relname as tbl, array_agg(indexrelid::regclass)::text as indexes, pg_size_pretty(SUM(pg_relation_size(indexrelid))::bigint) as size
+<br />
+    FROM pg_index i 
+<br />
+    JOIN pg_class c ON c.oid = i.indrelid 
+<br />
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+<br />
+    GROUP BY n.nspname, c.relname, indrelid, indkey, indclass, indoption, indexprs, indpred HAVING count(*) &gt; $57
+<br />
+),
+<br />
+
+<br />
+v_idx_ineff AS (
+<br />
+  SELECT schemaname, relname, indexrelname, idx_scan, 
+<br />
+    ROUND((idx_tup_read::numeric / NULLIF(idx_tup_fetch,$58)), $59) as ratio,
+<br />
+    pg_size_pretty(pg_relation_size(indexrelid)) as idx_size
+<br />
+  FROM pg_stat_user_indexes 
+<br />
+  WHERE idx_scan &gt; $60 AND (idx_tup_read::numeric / NULLIF(idx_tup_fetch,$61)) &gt; $62
+<br />
+),
+<br />
+
+<br />
+v_missing_idx AS (
+<br />
+  SELECT schemaname, relname, 
+<br />
+    pg_size_pretty(pg_total_relation_size(relid)) as table_size,
+<br />
+    seq_scan, seq_tup_read, idx_scan
+<br />
+  FROM pg_stat_user_tables 
+<br />
+  WHERE schemaname NOT IN ($63, $64)
+<br />
+    AND pg_total_relation_size(relid) &gt; $65 -- 10MB
+<br />
+    AND seq_scan &gt; $66 
+<br />
+    AND seq_tup_read &gt; $67
+<br />
+),
+<br />
+
+<br />
+v_fk_unindexed AS (
+<br />
+    SELECT n1.nspname || $68 || c1.relname as tbl, a1.attname as col 
+<br />
+    FROM pg_constraint t 
+<br />
+    JOIN pg_attribute a1 ON a1.attrelid=t.conrelid AND a1.attnum=t.conkey[$69] 
+<br />
+    JOIN pg_class c1 ON c1.oid=t.conrelid
+<br />
+    JOIN pg_namespace n1 ON n1.oid=c1.relnamespace
+<br />
+    WHERE t.contype=$70 AND NOT EXISTS (SELECT $71 FROM pg_index i WHERE i.indrelid=t.conrelid AND i.indkey[$72]=t.conkey[$73])
+<br />
+),
+<br />
+
+<br />
+v_wrap AS (
+<br />
+  SELECT datname, age(datfrozenxid) as xid_age, 
+<br />
+    ROUND(($74 * age(datfrozenxid) / NULLIF(current_setting($75)::bigint, $76))::numeric, $77) as pct,
+<br />
+    CASE WHEN age(datfrozenxid) &gt; ($78 * current_setting($79)::bigint) THEN $80
+<br />
+         WHEN age(datfrozenxid) &gt; ($81 * current_setting($82)::bigint) THEN $83
+<br />
+         ELSE $84
+<br />
+    END as status
+<br />
+  FROM pg_database 
+<br />
+  WHERE datallowconn AND age(datfrozenxid) &gt; $85
+<br />
+),
+<br />
+
+<br />
+v_locks AS (
+<br />
+  SELECT pid, usename, backend_type, 
+<br />
+    pg_blocking_pids(pid)::text as blockers,
+<br />
+    wait_event_type, wait_event,
+<br />
+    CASE WHEN state = $86 THEN $87
+<br />
+         WHEN wait_event_type IS NOT NULL THEN $88
+<br />
+         ELSE state
+<br />
+    END as actual_status,
+<br />
+    EXTRACT($89 FROM (now() - query_start))::int as wait_secs,
+<br />
+    substring(query, $90, $91) as query_snippet
+<br />
+  FROM pg_stat_activity 
+<br />
+  WHERE pg_blocking_pids(pid) &lt;&gt; $92 OR (state = $93 AND (now() - xact_start) &gt; interval $94)
+<br />
+),
+<br />
+
+<br />
+v_secu AS (
+<br />
+  SELECT rolname,
+<br />
+    CASE WHEN rolsuper THEN $95 ELSE $96 END as role_type,
+<br />
+    CASE WHEN NOT rolcanlogin THEN $97 
+<br />
+         WHEN rolpassword IS NULL THEN $98
+<br />
+         WHEN rolpassword LIKE $99 THEN $100
+<br />
+         WHEN rolpassword LIKE $101 THEN $102
+<br />
+         ELSE $103
+<br />
+    END as pwd_status,
+<br />
+    CASE WHEN rolsuper OR rolcreaterole OR rolreplication THEN $104 ELSE $105 END as risk
+<br />
+  FROM pg_roles 
+<br />
+  WHERE rolname NOT LIKE $106
+<br />
+),
+<br />
+
+<br />
+v_seq AS (
+<br />
+  SELECT schemaname, sequencename, last_value, max_value, 
+<br />
+    ROUND((last_value::numeric / NULLIF(max_value::numeric,$107)) * $108, $109) as pct_used,
+<br />
+    CASE WHEN last_value::numeric / NULLIF(max_value::numeric, $110) &gt; $111 THEN $112
+<br />
+         ELSE $113
+<br />
+    END as status
+<br />
+  FROM pg_sequences 
+<br />
+  WHERE (last_value::numeric / NULLIF(max_value::numeric,$114)) &gt; $115
+<br />
+),
+<br />
+
+<br />
+v_settings AS (
+<br />
+  SELECT name, setting, unit,
+<br />
+    CASE WHEN name = $116 AND setting = $117 THEN $118
+<br />
+         WHEN name = $119 AND setting = $120 THEN $121
+<br />
+         ELSE $122
+<br />
+    END as risk
+<br />
+  FROM pg_settings
+<br />
+  WHERE name IN ($123, $124, $125, $126, $127)
+<br />
+),
+<br />
+
+<br />
+v_buffer_health AS (
+<br />
+  SELECT 
+<br />
+    ROUND(sum(heap_blks_hit)::numeric / NULLIF(sum(heap_blks_hit) + sum(heap_blks_read), $128) * $129, $130) as hit_ratio_pct
+<br />
+  FROM pg_statio_user_tables
+<br />
+),
+<br />
+
+<br />
+/* --- HTML TEMPLATE --- */
+<br />
+html AS (
+<br />
+    SELECT $131 || (SELECT ver FROM v_ver) || $132 || to_char(now(), $133) || $134 || to_char(now(), $135) || $136 || (SELECT ver FROM v_ver) || $137 as val
+<br />
+    
+<br />
+    UNION ALL SELECT $138
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($139||name||$140||installed_version||$141||status||$142,$143) FROM v_ext),$144)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($145||datname||$146||size||$147||enc||$148,$149) FROM v_db_info),$150)
+<br />
+    UNION ALL SELECT $151||hit_ratio_pct||$152 FROM v_buffer_health
+<br />
+    UNION ALL SELECT $153
+<br />
+    
+<br />
+    UNION ALL SELECT $154
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($155||CASE WHEN status=$156 THEN $157 ELSE $158 END||$159||status||$160||archived_count||$161||failed_count||$162,$163) FROM v_archiving),$164)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($165||status||$166||details||$167,$168) FROM v_repl),$169)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($170||CASE WHEN risk=$171 THEN $172 ELSE $173 END||$174||status||$175||slot_name||$176||wal_retained||$177||risk||$178,$179) FROM v_slots),$180)
+<br />
+    UNION ALL SELECT $181
+<br />
+    
+<br />
+    UNION ALL SELECT $182
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($183||schemaname||$184||tablename||$185||wasted||$186||tbloat||$187,$188) FROM v_bloat LIMIT $189),$190)
+<br />
+    UNION ALL SELECT $191
+<br />
+    
+<br />
+    UNION ALL SELECT $192
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($193||tbl||$194||indexes||$195||size||$196,$197) FROM v_idx_duplicate),$198)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($199||schemaname||$200||relname||$201||ratio||$202||idx_size||$203,$204) FROM v_idx_ineff),$205)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($206||schemaname||$207||relname||$208||seq_scan||$209||table_size||$210,$211) FROM v_missing_idx LIMIT $212),$213)
+<br />
+    UNION ALL SELECT $214
+<br />
+    
+<br />
+    UNION ALL SELECT $215
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($216||CASE WHEN status=$217 THEN $218 ELSE $219 END||$220||datname||$221||pct||$222||status||$223,$224) FROM v_wrap),$225)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($226||CASE WHEN status=$227 THEN $228 ELSE $229 END||$230||schemaname||$231||sequencename||$232||pct_used||$233,$234) FROM v_seq),$235)
+<br />
+    UNION ALL SELECT $236
+<br />
+    
+<br />
+    UNION ALL SELECT $237
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($238||pid||$239||usename||$240||actual_status||$241||wait_secs||$242||blockers||$243||query_snippet||$244,$245) FROM v_locks),$246)
+<br />
+    UNION ALL SELECT $247
+<br />
+    
+<br />
+    UNION ALL SELECT $248
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($249||role_type||$250||rolname||$251||pwd_status||$252||risk||$253,$254) FROM v_secu),$255)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($256||name||$257||setting||$258||risk||$259,$260) FROM v_settings),$261)
+<br />
+    UNION ALL SELECT $262
+<br />
+    
+<br />
+    UNION ALL SELECT $263
+<br />
+)
+<br />
+SELECT string_agg(val, $264) FROM html</td>
+    <td align="right">4</td>
+    <td align="right">647.58</td>
+    <td align="right">161.89</td>
+    <td align="right">4</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">WITH RECURSIVE 
+<br />
+constants AS (SELECT current_setting($1)::numeric AS bs, $2 AS chunk_size),
+<br />
+
+<br />
+
+<br />
+v_unlogged AS (
+<br />
+    SELECT n.nspname || $3 || c.relname as object_name, 
+<br />
+    CASE WHEN c.relkind=$4 THEN $5 WHEN c.relkind=$6 THEN $7 ELSE $8 END as kind,
+<br />
+    pg_size_pretty(c.relpages::bigint*$9*$10) as size
+<br />
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+<br />
+    WHERE c.relpersistence = $11
+<br />
+),
+<br />
+
+<br />
+v_bloat AS (
+<br />
+    SELECT schemaname, tablename, 
+<br />
+    ROUND((CASE WHEN otta=$12 THEN $13 ELSE relpages::FLOAT/NULLIF(otta,$14) END)::NUMERIC,$15) AS tbloat,
+<br />
+    pg_size_pretty(((relpages-otta)*(SELECT bs FROM constants))::bigint) AS wasted
+<br />
+    FROM (
+<br />
+        SELECT schemaname, tablename, cc.relpages, CEIL((cc.reltuples*(($16+$17)+$18))/NULLIF((SELECT bs FROM constants)-$19, $20)) AS otta
+<br />
+        FROM pg_stats s JOIN pg_class cc ON cc.relname = s.tablename JOIN pg_namespace nn ON cc.relnamespace = nn.oid AND nn.nspname = s.schemaname
+<br />
+        WHERE s.schemaname NOT IN ($21, $22) 
+<br />
+        GROUP BY schemaname, tablename, cc.relpages, cc.reltuples
+<br />
+    ) foo WHERE relpages &gt; otta
+<br />
+),
+<br />
+
+<br />
+v_idx_redundant AS (
+<br />
+    SELECT i.indexrelid::regclass::text as idx_candidate, j.indexrelid::regclass::text as idx_keep,
+<br />
+    pg_size_pretty(pg_relation_size(i.indexrelid)) as size_saved
+<br />
+    FROM pg_index i JOIN pg_index j ON i.indrelid = j.indrelid AND i.indexrelid &lt;&gt; j.indexrelid
+<br />
+    WHERE string_to_array(i.indkey::text, $23)::int2[] &lt;@ string_to_array(j.indkey::text, $24)::int2[]
+<br />
+    AND NOT i.indisunique AND NOT i.indisprimary
+<br />
+),
+<br />
+
+<br />
+v_idx_duplicate AS (
+<br />
+    SELECT n.nspname || $25 || c.relname as tbl, array_agg(indexrelid::regclass)::text as indexes, pg_size_pretty(SUM(pg_relation_size(indexrelid))::bigint) as size
+<br />
+    FROM pg_index i 
+<br />
+    JOIN pg_class c ON c.oid = i.indrelid 
+<br />
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+<br />
+    GROUP BY n.nspname, c.relname, indrelid, indkey, indclass, indoption, indexprs, indpred HAVING count(*) &gt; $26
+<br />
+),
+<br />
+
+<br />
+v_idx_unused AS (
+<br />
+    SELECT schemaname, relname, indexrelname, pg_size_pretty(pg_relation_size(indexrelid)) as size
+<br />
+    FROM pg_stat_user_indexes WHERE idx_scan = $27 AND idx_tup_read = $28 AND schemaname NOT IN ($29, $30)
+<br />
+),
+<br />
+
+<br />
+v_idx_ineff AS (
+<br />
+    SELECT schemaname, relname, indexrelname, idx_scan, idx_tup_fetch, (idx_tup_read::numeric / NULLIF(idx_tup_fetch,$31))::numeric(10,1) as ratio
+<br />
+    FROM pg_stat_user_indexes WHERE idx_scan &gt; $32 AND (idx_tup_read::numeric / NULLIF(idx_tup_fetch,$33)) &gt; $34
+<br />
+),
+<br />
+
+<br />
+v_idx_invalid AS (
+<br />
+    SELECT n.nspname, c.relname FROM pg_index i JOIN pg_class c ON i.indexrelid=c.oid JOIN pg_namespace n ON c.relnamespace=n.oid
+<br />
+    WHERE NOT i.indisvalid
+<br />
+),
+<br />
+
+<br />
+v_missing_idx AS (
+<br />
+    SELECT schemaname, relname, seq_scan, seq_tup_read, idx_scan, 
+<br />
+    (seq_tup_read::numeric / NULLIF(idx_tup_fetch, $35))::numeric(10,2) as ratio
+<br />
+    FROM pg_stat_user_tables WHERE seq_scan &gt; $36 AND (seq_tup_read::numeric / NULLIF(idx_tup_fetch, $37)) &gt; $38
+<br />
+),
+<br />
+
+<br />
+v_fk_unindexed AS (
+<br />
+    SELECT n1.nspname || $39 || c1.relname as tbl, a1.attname as col 
+<br />
+    FROM pg_constraint t 
+<br />
+    JOIN pg_attribute a1 ON a1.attrelid=t.conrelid AND a1.attnum=t.conkey[$40] 
+<br />
+    JOIN pg_class c1 ON c1.oid=t.conrelid
+<br />
+    JOIN pg_namespace n1 ON n1.oid=c1.relnamespace
+<br />
+    WHERE t.contype=$41 AND NOT EXISTS (SELECT $42 FROM pg_index i WHERE i.indrelid=t.conrelid AND i.indkey[$43]=t.conkey[$44])
+<br />
+),
+<br />
+
+<br />
+v_fk_dup AS (
+<br />
+    SELECT conname, n.nspname || $45 || c.relname as tbl
+<br />
+    FROM pg_constraint t1 
+<br />
+    JOIN pg_class c ON t1.conrelid = c.oid
+<br />
+    JOIN pg_namespace n ON c.relnamespace = n.oid
+<br />
+    WHERE EXISTS (SELECT $46 FROM pg_constraint t2 WHERE t1.conrelid=t2.conrelid AND t1.conkey=t2.conkey AND t1.oid &lt;&gt; t2.oid AND t2.contype=$47) AND t1.contype=$48
+<br />
+),
+<br />
+
+<br />
+v_secu AS (
+<br />
+    SELECT rolname, rolsuper, CASE WHEN rolpassword IS NULL THEN $49 ELSE $50 END as pwd 
+<br />
+    FROM pg_roles WHERE rolname NOT LIKE $51
+<br />
+),
+<br />
+
+<br />
+v_funcs AS (
+<br />
+    SELECT n.nspname, p.proname, l.lanname, CASE WHEN p.prosecdef THEN $52 ELSE $53 END as sec
+<br />
+    FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid JOIN pg_language l ON p.prolang=l.oid
+<br />
+    WHERE n.nspname NOT IN ($54,$55) AND p.prosecdef
+<br />
+),
+<br />
+
+<br />
+v_seq AS (
+<br />
+    SELECT schemaname, sequencename, last_value, max_value, 
+<br />
+    round((last_value::numeric / NULLIF(max_value::numeric,$56)) * $57, $58) as pct
+<br />
+    FROM pg_sequences WHERE (last_value::numeric / NULLIF(max_value::numeric,$59)) &gt; $60
+<br />
+),
+<br />
+
+<br />
+v_empty_tbl AS (SELECT schemaname, relname FROM pg_stat_user_tables WHERE n_live_tup = $61),
+<br />
+
+<br />
+v_unused_tbl AS (SELECT schemaname, relname FROM pg_stat_user_tables WHERE (seq_tup_read + idx_tup_fetch + n_tup_ins + n_tup_upd + n_tup_del) = $62),
+<br />
+
+<br />
+v_single_col AS (
+<br />
+    SELECT table_schema, table_name FROM information_schema.columns 
+<br />
+    WHERE table_schema NOT IN ($63,$64) GROUP BY table_schema, table_name HAVING count(*) = $65
+<br />
+),
+<br />
+
+<br />
+v_useless_col AS (
+<br />
+    SELECT schemaname, tablename as relname, attname, null_frac 
+<br />
+    FROM pg_stats WHERE null_frac &gt; $66 AND schemaname NOT IN ($67,$68)
+<br />
+),
+<br />
+
+<br />
+v_av_tune AS (
+<br />
+    SELECT schemaname, relname, n_dead_tup, last_autovacuum 
+<br />
+    FROM pg_stat_user_tables 
+<br />
+    WHERE n_dead_tup &gt; (current_setting($69)::int + current_setting($70)::float * n_live_tup)
+<br />
+),
+<br />
+
+<br />
+v_slots AS (
+<br />
+    SELECT slot_name, active, restart_lsn FROM pg_replication_slots WHERE NOT active
+<br />
+),
+<br />
+
+<br />
+v_denorm AS (
+<br />
+    SELECT table_schema, table_name, substring(column_name FROM $71) as pattern, count(*) as cnt 
+<br />
+    FROM information_schema.columns WHERE column_name ~ $72 AND table_schema NOT IN ($73,$74)
+<br />
+    GROUP BY table_schema, table_name, substring(column_name FROM '^(.*)[0-9]+$') HAVING count(*) &gt; $75
+<br />
+),
+<br />
+
+<br />
+v_frag AS (
+<br />
+    SELECT n.nspname || $76 || t.relname as relname, a.attname, ty.typname 
+<br />
+    FROM pg_index i 
+<br />
+    JOIN pg_class t ON t.oid=i.indrelid 
+<br />
+    JOIN pg_namespace n ON t.relnamespace = n.oid
+<br />
+    JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=ANY(i.indkey) 
+<br />
+    JOIN pg_type ty ON a.atttypid=ty.oid
+<br />
+    WHERE i.indisprimary AND ty.typname IN ($77,$78,$79)
+<br />
+),
+<br />
+
+<br />
+v_too_many_idx AS (
+<br />
+    SELECT schemaname, relname, count(*) as cnt FROM pg_stat_user_indexes GROUP BY schemaname, relname HAVING count(*) &gt; $80
+<br />
+),
+<br />
+
+<br />
+html AS (
+<br />
+    SELECT $81 as val
+<br />
+    
+<br />
+    UNION ALL SELECT $82
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($83||object_name||$84||size||$85,$86) FROM v_unlogged),$87)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($88||schemaname||$89||tablename||$90||wasted||$91||tbloat||$92,$93) FROM v_bloat LIMIT $94),$95)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($96||relname||$97||typname||$98,$99) FROM v_frag),$100)
+<br />
+    UNION ALL SELECT $101
+<br />
+
+<br />
+    UNION ALL SELECT $102
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($103||tbl||$104||indexes||$105,$106) FROM v_idx_duplicate),$107)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($108||idx_candidate||$109||idx_keep||$110||size_saved||$111,$112) FROM v_idx_redundant),$113)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($114||schemaname||$115||relname||$116||indexrelname||$117||ratio||$118,$119) FROM v_idx_ineff),$120)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($121||schemaname||$122||relname||$123||indexrelname||$124||size||$125,$126) FROM v_idx_unused LIMIT $127),$128)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($129||schemaname||$130||relname||$131||cnt||$132,$133) FROM v_too_many_idx),$134)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($135||nspname||$136||relname||$137,$138) FROM v_idx_invalid),$139)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($140||schemaname||$141||relname||$142||seq_scan||$143,$144) FROM v_missing_idx LIMIT $145),$146)
+<br />
+    UNION ALL SELECT $147
+<br />
+
+<br />
+    UNION ALL SELECT $148
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($149||tbl||$150||col||$151,$152) FROM v_fk_unindexed),$153)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($154||tbl||$155||conname||$156,$157) FROM v_fk_dup),$158)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($159||table_schema||$160||table_name||$161||pattern||$162||cnt||$163,$164) FROM v_denorm),$165)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($166||schemaname||$167||relname||$168,$169) FROM v_empty_tbl LIMIT $170),$171)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($172||schemaname||$173||relname||$174,$175) FROM v_unused_tbl LIMIT $176),$177)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($178||table_schema||$179||table_name||$180,$181) FROM v_single_col),$182)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($183||schemaname||$184||relname||$185||attname||$186||(null_frac*$187)::int||$188,$189) FROM v_useless_col),$190)
+<br />
+    UNION ALL SELECT $191
+<br />
+
+<br />
+    UNION ALL SELECT $192
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($193||schemaname||$194||sequencename||$195||pct||$196,$197) FROM v_seq),$198)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($199||schemaname||$200||relname||$201||n_dead_tup||$202,$203) FROM v_av_tune),$204)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($205||slot_name||$206||restart_lsn||$207,$208) FROM v_slots),$209)
+<br />
+    UNION ALL SELECT $210
+<br />
+
+<br />
+    UNION ALL SELECT $211
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($212||rolname||$213||pwd||$214||rolsuper||$215,$216) FROM v_secu),$217)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($218||nspname||$219||proname||$220,$221) FROM v_funcs),$222)
+<br />
+    UNION ALL SELECT $223
+<br />
+
+<br />
+    UNION ALL SELECT $224
+<br />
+)
+<br />
+SELECT string_agg(val, $225) FROM html</td>
+    <td align="right">1</td>
+    <td align="right">138.91</td>
+    <td align="right">138.91</td>
+    <td align="right">1</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">CREATE EXTENSION pg_stat_statements</td>
+    <td align="right">1</td>
+    <td align="right">51.56</td>
+    <td align="right">51.56</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(total_exec_time::numeric, $1) AS &quot;Total (ms)&quot;,
+<br />
+    round((total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time))::numeric, $2) AS &quot;CPU Time (ms)&quot;,
+<br />
+    round(($3 * (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) / NULLIF(total_exec_time, $4))::numeric, $5) AS &quot;PCT CPU&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE calls &gt; $6
+<br />
+ORDER BY (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) DESC 
+<br />
+LIMIT $7</td>
+    <td align="right">7</td>
+    <td align="right">4.64</td>
+    <td align="right">0.66</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round(total_exec_time::numeric, $2) AS &quot;Total (ms)&quot;,
+<br />
+    round(($3 * total_exec_time / SUM(total_exec_time) OVER())::numeric, $4) AS &quot;PCT Charge&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY calls DESC 
+<br />
+LIMIT $5</td>
+    <td align="right">7</td>
+    <td align="right">4.22</td>
+    <td align="right">0.60</td>
+    <td align="right">66</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    pg_size_pretty(wal_bytes) AS &quot;Total WAL&quot;,
+<br />
+    round((wal_bytes / NULLIF(calls, $1))::numeric, $2) AS &quot;Bytes / Appel&quot;,
+<br />
+    wal_records AS &quot;WAL Records&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY wal_bytes DESC 
+<br />
+LIMIT $3</td>
+    <td align="right">7</td>
+    <td align="right">4.02</td>
+    <td align="right">0.57</td>
+    <td align="right">65</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(total_exec_time::numeric, $1) AS &quot;Total Time (ms)&quot;,
+<br />
+    round(mean_exec_time::numeric, $2) AS &quot;Moyenne (ms)&quot;,
+<br />
+    rows AS &quot;Lignes Totales&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY total_exec_time DESC 
+<br />
+LIMIT $3</td>
+    <td align="right">6</td>
+    <td align="right">3.45</td>
+    <td align="right">0.58</td>
+    <td align="right">57</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(($1 * shared_blks_hit / NULLIF(shared_blks_hit + shared_blks_read, $2)), $3) AS &quot;Cache Hit PCT&quot;,
+<br />
+    (shared_blks_dirtied + local_blks_dirtied) AS &quot;Blocks Salis&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY (shared_blks_hit + shared_blks_read) DESC
+<br />
+LIMIT $4</td>
+    <td align="right">6</td>
+    <td align="right">2.39</td>
+    <td align="right">0.40</td>
+    <td align="right">60</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT
+<br />
+    query AS &quot;Requete (Cliquer)&quot;, 
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round((shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)::numeric, $2) AS &quot;IO Wait (ms)&quot;,
+<br />
+    round(($3 * (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) / NULLIF(total_exec_time, $4))::numeric, $5) AS &quot;PCT IO&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) &gt; $6
+<br />
+ORDER BY (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) DESC 
+<br />
+LIMIT $7</td>
+    <td align="right">7</td>
+    <td align="right">2.31</td>
+    <td align="right">0.33</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round((jit_generation_time + jit_inlining_time + jit_optimization_time + jit_emission_time)::numeric, $2) AS &quot;JIT Overhead (ms)&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE jit_functions &gt; $3
+<br />
+ORDER BY (jit_generation_time + jit_inlining_time + jit_optimization_time + jit_emission_time) DESC 
+<br />
+LIMIT $4</td>
+    <td align="right">6</td>
+    <td align="right">1.91</td>
+    <td align="right">0.32</td>
+    <td align="right">0</td>
+  </tr>
+</table>
+
+<h2 id="jitter" data-i18n="h2_jitter">7. Instabilite (Jitter)</h2>
+<p data-i18n="p_jitter">Ecart-type eleve (plans instables).</p>
+<table border="0" class="data-table">
+  <tr>
+    <th align="center">Requete (Cliquer)</th>
+    <th align="center">Appels</th>
+    <th align="center">Moyenne (ms)</th>
+    <th align="center">Ecart-Type (ms)</th>
+    <th align="center">Ratio Var.</th>
+  </tr>
+</table>
+
+<h2 id="temp" data-i18n="h2_temp">8. Temp Files (Disk Spill)</h2>
+<p data-i18n="p_temp">Manque de work_mem.</p>
+<table border="0" class="data-table">
+  <tr>
+    <th align="center">Requete (Cliquer)</th>
+    <th align="center">Appels</th>
+    <th align="center">Blks Written</th>
+    <th align="center">Total Temp Size</th>
+    <th align="center">Blks / Appel</th>
+  </tr>
+</table>
+
+<h2 id="cache" data-i18n="h2_cache">9. Cache Miss et Blocs Salis</h2>
+<p data-i18n="p_cache">Pression sur le buffer pool (RAM).</p>
+<table border="0" class="data-table">
+  <tr>
+    <th align="center">Requete (Cliquer)</th>
+    <th align="center">Appels</th>
+    <th align="center">Cache Hit PCT</th>
+    <th align="center">Blocks Salis</th>
+  </tr>
+  <tr valign="top">
+    <td align="left">WITH RECURSIVE 
+<br />
+constants AS (SELECT current_setting($1)::numeric AS bs, $2 AS chunk_size),
+<br />
+
+<br />
+/* --- DATA GATHERING --- */
+<br />
+v_ver AS (
+<br />
+    SELECT current_setting($3) as ver, 
+<br />
+    substring(current_setting($4) from $5)::int as major_ver
+<br />
+),
+<br />
+
+<br />
+v_ext AS (
+<br />
+    SELECT name, installed_version, default_version, 
+<br />
+    CASE WHEN installed_version &lt;&gt; default_version THEN $6 ELSE $7 END as status
+<br />
+    FROM pg_available_extensions WHERE installed_version IS NOT NULL
+<br />
+),
+<br />
+
+<br />
+v_db_info AS (
+<br />
+    SELECT datname, pg_encoding_to_char(encoding) as enc, datcollate, pg_size_pretty(pg_database_size(datname)) as size
+<br />
+    FROM pg_database WHERE datallowconn AND NOT datistemplate
+<br />
+),
+<br />
+
+<br />
+v_archiving AS (
+<br />
+  SELECT 
+<br />
+    CASE WHEN NOT has_table_privilege($8, $9) THEN $10 
+<br />
+         ELSE (SELECT CASE WHEN archived_count IS NULL THEN $11 WHEN failed_count &gt; $12 THEN $13 ELSE $14 END FROM pg_stat_archiver)
+<br />
+    END as status,
+<br />
+    CASE WHEN has_table_privilege($15, $16) THEN (SELECT COALESCE(archived_count, $17) FROM pg_stat_archiver) ELSE $18 END as archived_count,
+<br />
+    CASE WHEN has_table_privilege($19, $20) THEN (SELECT COALESCE(failed_count, $21) FROM pg_stat_archiver) ELSE $22 END as failed_count,
+<br />
+    CASE WHEN has_table_privilege($23, $24) THEN (SELECT COALESCE(to_char(last_failed_time, $25), $26) FROM pg_stat_archiver) ELSE $27 END as last_fail
+<br />
+),
+<br />
+
+<br />
+v_repl AS (
+<br />
+  SELECT 
+<br />
+    CASE 
+<br />
+      WHEN pg_is_in_recovery() THEN $28
+<br />
+      WHEN (SELECT COUNT(*) FROM pg_stat_replication) = $29 THEN $30
+<br />
+      ELSE $31
+<br />
+    END as status,
+<br />
+    CASE 
+<br />
+      WHEN pg_is_in_recovery() THEN $32
+<br />
+      ELSE (
+<br />
+        SELECT COALESCE(
+<br />
+          STRING_AGG(application_name || $33 || state || $34 || 
+<br />
+            pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn)), $35),
+<br />
+          $36
+<br />
+        )
+<br />
+        FROM pg_stat_replication
+<br />
+      )
+<br />
+    END as details
+<br />
+),
+<br />
+
+<br />
+v_slots AS (
+<br />
+  SELECT 
+<br />
+    slot_name,
+<br />
+    slot_type,
+<br />
+    CASE WHEN active THEN $37 ELSE $38 END as status,
+<br />
+    pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) as wal_retained,
+<br />
+    CASE WHEN NOT active AND pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) &gt; $39 THEN $40
+<br />
+         WHEN NOT active THEN $41
+<br />
+         ELSE $42
+<br />
+    END as risk
+<br />
+  FROM pg_replication_slots
+<br />
+  WHERE (SELECT has_table_privilege($43, $44))
+<br />
+),
+<br />
+
+<br />
+v_bloat AS (
+<br />
+    SELECT schemaname, tablename, 
+<br />
+    ROUND((CASE WHEN otta=$45 THEN $46 ELSE relpages::FLOAT/NULLIF(otta,$47) END)::NUMERIC,$48) AS tbloat,
+<br />
+    pg_size_pretty(((relpages-otta)*(SELECT bs FROM constants))::bigint) AS wasted
+<br />
+    FROM (
+<br />
+        SELECT schemaname, tablename, cc.relpages, CEIL((cc.reltuples*(($49+$50)+$51))/NULLIF((SELECT bs FROM constants)-$52, $53)) AS otta
+<br />
+        FROM pg_stats s JOIN pg_class cc ON cc.relname = s.tablename JOIN pg_namespace nn ON cc.relnamespace = nn.oid AND nn.nspname = s.schemaname
+<br />
+        WHERE s.schemaname NOT IN ($54, $55) 
+<br />
+        GROUP BY schemaname, tablename, cc.relpages, cc.reltuples
+<br />
+    ) foo WHERE relpages &gt; otta
+<br />
+),
+<br />
+
+<br />
+v_idx_duplicate AS (
+<br />
+    SELECT n.nspname || $56 || c.relname as tbl, array_agg(indexrelid::regclass)::text as indexes, pg_size_pretty(SUM(pg_relation_size(indexrelid))::bigint) as size
+<br />
+    FROM pg_index i 
+<br />
+    JOIN pg_class c ON c.oid = i.indrelid 
+<br />
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+<br />
+    GROUP BY n.nspname, c.relname, indrelid, indkey, indclass, indoption, indexprs, indpred HAVING count(*) &gt; $57
+<br />
+),
+<br />
+
+<br />
+v_idx_ineff AS (
+<br />
+  SELECT schemaname, relname, indexrelname, idx_scan, 
+<br />
+    ROUND((idx_tup_read::numeric / NULLIF(idx_tup_fetch,$58)), $59) as ratio,
+<br />
+    pg_size_pretty(pg_relation_size(indexrelid)) as idx_size
+<br />
+  FROM pg_stat_user_indexes 
+<br />
+  WHERE idx_scan &gt; $60 AND (idx_tup_read::numeric / NULLIF(idx_tup_fetch,$61)) &gt; $62
+<br />
+),
+<br />
+
+<br />
+v_missing_idx AS (
+<br />
+  SELECT schemaname, relname, 
+<br />
+    pg_size_pretty(pg_total_relation_size(relid)) as table_size,
+<br />
+    seq_scan, seq_tup_read, idx_scan
+<br />
+  FROM pg_stat_user_tables 
+<br />
+  WHERE schemaname NOT IN ($63, $64)
+<br />
+    AND pg_total_relation_size(relid) &gt; $65 -- 10MB
+<br />
+    AND seq_scan &gt; $66 
+<br />
+    AND seq_tup_read &gt; $67
+<br />
+),
+<br />
+
+<br />
+v_fk_unindexed AS (
+<br />
+    SELECT n1.nspname || $68 || c1.relname as tbl, a1.attname as col 
+<br />
+    FROM pg_constraint t 
+<br />
+    JOIN pg_attribute a1 ON a1.attrelid=t.conrelid AND a1.attnum=t.conkey[$69] 
+<br />
+    JOIN pg_class c1 ON c1.oid=t.conrelid
+<br />
+    JOIN pg_namespace n1 ON n1.oid=c1.relnamespace
+<br />
+    WHERE t.contype=$70 AND NOT EXISTS (SELECT $71 FROM pg_index i WHERE i.indrelid=t.conrelid AND i.indkey[$72]=t.conkey[$73])
+<br />
+),
+<br />
+
+<br />
+v_wrap AS (
+<br />
+  SELECT datname, age(datfrozenxid) as xid_age, 
+<br />
+    ROUND(($74 * age(datfrozenxid) / NULLIF(current_setting($75)::bigint, $76))::numeric, $77) as pct,
+<br />
+    CASE WHEN age(datfrozenxid) &gt; ($78 * current_setting($79)::bigint) THEN $80
+<br />
+         WHEN age(datfrozenxid) &gt; ($81 * current_setting($82)::bigint) THEN $83
+<br />
+         ELSE $84
+<br />
+    END as status
+<br />
+  FROM pg_database 
+<br />
+  WHERE datallowconn AND age(datfrozenxid) &gt; $85
+<br />
+),
+<br />
+
+<br />
+v_locks AS (
+<br />
+  SELECT pid, usename, backend_type, 
+<br />
+    pg_blocking_pids(pid)::text as blockers,
+<br />
+    wait_event_type, wait_event,
+<br />
+    CASE WHEN state = $86 THEN $87
+<br />
+         WHEN wait_event_type IS NOT NULL THEN $88
+<br />
+         ELSE state
+<br />
+    END as actual_status,
+<br />
+    EXTRACT($89 FROM (now() - query_start))::int as wait_secs,
+<br />
+    substring(query, $90, $91) as query_snippet
+<br />
+  FROM pg_stat_activity 
+<br />
+  WHERE pg_blocking_pids(pid) &lt;&gt; $92 OR (state = $93 AND (now() - xact_start) &gt; interval $94)
+<br />
+),
+<br />
+
+<br />
+v_secu AS (
+<br />
+  SELECT rolname,
+<br />
+    CASE WHEN rolsuper THEN $95 ELSE $96 END as role_type,
+<br />
+    CASE WHEN NOT rolcanlogin THEN $97 
+<br />
+         WHEN rolpassword IS NULL THEN $98
+<br />
+         WHEN rolpassword LIKE $99 THEN $100
+<br />
+         WHEN rolpassword LIKE $101 THEN $102
+<br />
+         ELSE $103
+<br />
+    END as pwd_status,
+<br />
+    CASE WHEN rolsuper OR rolcreaterole OR rolreplication THEN $104 ELSE $105 END as risk
+<br />
+  FROM pg_roles 
+<br />
+  WHERE rolname NOT LIKE $106
+<br />
+),
+<br />
+
+<br />
+v_seq AS (
+<br />
+  SELECT schemaname, sequencename, last_value, max_value, 
+<br />
+    ROUND((last_value::numeric / NULLIF(max_value::numeric,$107)) * $108, $109) as pct_used,
+<br />
+    CASE WHEN last_value::numeric / NULLIF(max_value::numeric, $110) &gt; $111 THEN $112
+<br />
+         ELSE $113
+<br />
+    END as status
+<br />
+  FROM pg_sequences 
+<br />
+  WHERE (last_value::numeric / NULLIF(max_value::numeric,$114)) &gt; $115
+<br />
+),
+<br />
+
+<br />
+v_settings AS (
+<br />
+  SELECT name, setting, unit,
+<br />
+    CASE WHEN name = $116 AND setting = $117 THEN $118
+<br />
+         WHEN name = $119 AND setting = $120 THEN $121
+<br />
+         ELSE $122
+<br />
+    END as risk
+<br />
+  FROM pg_settings
+<br />
+  WHERE name IN ($123, $124, $125, $126, $127)
+<br />
+),
+<br />
+
+<br />
+v_buffer_health AS (
+<br />
+  SELECT 
+<br />
+    ROUND(sum(heap_blks_hit)::numeric / NULLIF(sum(heap_blks_hit) + sum(heap_blks_read), $128) * $129, $130) as hit_ratio_pct
+<br />
+  FROM pg_statio_user_tables
+<br />
+),
+<br />
+
+<br />
+/* --- HTML TEMPLATE --- */
+<br />
+html AS (
+<br />
+    SELECT $131 || (SELECT ver FROM v_ver) || $132 || to_char(now(), $133) || $134 || to_char(now(), $135) || $136 || (SELECT ver FROM v_ver) || $137 as val
+<br />
+    
+<br />
+    UNION ALL SELECT $138
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($139||name||$140||installed_version||$141||status||$142,$143) FROM v_ext),$144)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($145||datname||$146||size||$147||enc||$148,$149) FROM v_db_info),$150)
+<br />
+    UNION ALL SELECT $151||hit_ratio_pct||$152 FROM v_buffer_health
+<br />
+    UNION ALL SELECT $153
+<br />
+    
+<br />
+    UNION ALL SELECT $154
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($155||CASE WHEN status=$156 THEN $157 ELSE $158 END||$159||status||$160||archived_count||$161||failed_count||$162,$163) FROM v_archiving),$164)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($165||status||$166||details||$167,$168) FROM v_repl),$169)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($170||CASE WHEN risk=$171 THEN $172 ELSE $173 END||$174||status||$175||slot_name||$176||wal_retained||$177||risk||$178,$179) FROM v_slots),$180)
+<br />
+    UNION ALL SELECT $181
+<br />
+    
+<br />
+    UNION ALL SELECT $182
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($183||schemaname||$184||tablename||$185||wasted||$186||tbloat||$187,$188) FROM v_bloat LIMIT $189),$190)
+<br />
+    UNION ALL SELECT $191
+<br />
+    
+<br />
+    UNION ALL SELECT $192
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($193||tbl||$194||indexes||$195||size||$196,$197) FROM v_idx_duplicate),$198)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($199||schemaname||$200||relname||$201||ratio||$202||idx_size||$203,$204) FROM v_idx_ineff),$205)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($206||schemaname||$207||relname||$208||seq_scan||$209||table_size||$210,$211) FROM v_missing_idx LIMIT $212),$213)
+<br />
+    UNION ALL SELECT $214
+<br />
+    
+<br />
+    UNION ALL SELECT $215
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($216||CASE WHEN status=$217 THEN $218 ELSE $219 END||$220||datname||$221||pct||$222||status||$223,$224) FROM v_wrap),$225)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($226||CASE WHEN status=$227 THEN $228 ELSE $229 END||$230||schemaname||$231||sequencename||$232||pct_used||$233,$234) FROM v_seq),$235)
+<br />
+    UNION ALL SELECT $236
+<br />
+    
+<br />
+    UNION ALL SELECT $237
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($238||pid||$239||usename||$240||actual_status||$241||wait_secs||$242||blockers||$243||query_snippet||$244,$245) FROM v_locks),$246)
+<br />
+    UNION ALL SELECT $247
+<br />
+    
+<br />
+    UNION ALL SELECT $248
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($249||role_type||$250||rolname||$251||pwd_status||$252||risk||$253,$254) FROM v_secu),$255)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($256||name||$257||setting||$258||risk||$259,$260) FROM v_settings),$261)
+<br />
+    UNION ALL SELECT $262
+<br />
+    
+<br />
+    UNION ALL SELECT $263
+<br />
+)
+<br />
+SELECT string_agg(val, $264) FROM html</td>
+    <td align="right">4</td>
+    <td align="right">100.00</td>
+    <td align="right">1</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">WITH RECURSIVE 
+<br />
+constants AS (SELECT current_setting($1)::numeric AS bs, $2 AS chunk_size),
+<br />
+
+<br />
+
+<br />
+v_unlogged AS (
+<br />
+    SELECT n.nspname || $3 || c.relname as object_name, 
+<br />
+    CASE WHEN c.relkind=$4 THEN $5 WHEN c.relkind=$6 THEN $7 ELSE $8 END as kind,
+<br />
+    pg_size_pretty(c.relpages::bigint*$9*$10) as size
+<br />
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+<br />
+    WHERE c.relpersistence = $11
+<br />
+),
+<br />
+
+<br />
+v_bloat AS (
+<br />
+    SELECT schemaname, tablename, 
+<br />
+    ROUND((CASE WHEN otta=$12 THEN $13 ELSE relpages::FLOAT/NULLIF(otta,$14) END)::NUMERIC,$15) AS tbloat,
+<br />
+    pg_size_pretty(((relpages-otta)*(SELECT bs FROM constants))::bigint) AS wasted
+<br />
+    FROM (
+<br />
+        SELECT schemaname, tablename, cc.relpages, CEIL((cc.reltuples*(($16+$17)+$18))/NULLIF((SELECT bs FROM constants)-$19, $20)) AS otta
+<br />
+        FROM pg_stats s JOIN pg_class cc ON cc.relname = s.tablename JOIN pg_namespace nn ON cc.relnamespace = nn.oid AND nn.nspname = s.schemaname
+<br />
+        WHERE s.schemaname NOT IN ($21, $22) 
+<br />
+        GROUP BY schemaname, tablename, cc.relpages, cc.reltuples
+<br />
+    ) foo WHERE relpages &gt; otta
+<br />
+),
+<br />
+
+<br />
+v_idx_redundant AS (
+<br />
+    SELECT i.indexrelid::regclass::text as idx_candidate, j.indexrelid::regclass::text as idx_keep,
+<br />
+    pg_size_pretty(pg_relation_size(i.indexrelid)) as size_saved
+<br />
+    FROM pg_index i JOIN pg_index j ON i.indrelid = j.indrelid AND i.indexrelid &lt;&gt; j.indexrelid
+<br />
+    WHERE string_to_array(i.indkey::text, $23)::int2[] &lt;@ string_to_array(j.indkey::text, $24)::int2[]
+<br />
+    AND NOT i.indisunique AND NOT i.indisprimary
+<br />
+),
+<br />
+
+<br />
+v_idx_duplicate AS (
+<br />
+    SELECT n.nspname || $25 || c.relname as tbl, array_agg(indexrelid::regclass)::text as indexes, pg_size_pretty(SUM(pg_relation_size(indexrelid))::bigint) as size
+<br />
+    FROM pg_index i 
+<br />
+    JOIN pg_class c ON c.oid = i.indrelid 
+<br />
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+<br />
+    GROUP BY n.nspname, c.relname, indrelid, indkey, indclass, indoption, indexprs, indpred HAVING count(*) &gt; $26
+<br />
+),
+<br />
+
+<br />
+v_idx_unused AS (
+<br />
+    SELECT schemaname, relname, indexrelname, pg_size_pretty(pg_relation_size(indexrelid)) as size
+<br />
+    FROM pg_stat_user_indexes WHERE idx_scan = $27 AND idx_tup_read = $28 AND schemaname NOT IN ($29, $30)
+<br />
+),
+<br />
+
+<br />
+v_idx_ineff AS (
+<br />
+    SELECT schemaname, relname, indexrelname, idx_scan, idx_tup_fetch, (idx_tup_read::numeric / NULLIF(idx_tup_fetch,$31))::numeric(10,1) as ratio
+<br />
+    FROM pg_stat_user_indexes WHERE idx_scan &gt; $32 AND (idx_tup_read::numeric / NULLIF(idx_tup_fetch,$33)) &gt; $34
+<br />
+),
+<br />
+
+<br />
+v_idx_invalid AS (
+<br />
+    SELECT n.nspname, c.relname FROM pg_index i JOIN pg_class c ON i.indexrelid=c.oid JOIN pg_namespace n ON c.relnamespace=n.oid
+<br />
+    WHERE NOT i.indisvalid
+<br />
+),
+<br />
+
+<br />
+v_missing_idx AS (
+<br />
+    SELECT schemaname, relname, seq_scan, seq_tup_read, idx_scan, 
+<br />
+    (seq_tup_read::numeric / NULLIF(idx_tup_fetch, $35))::numeric(10,2) as ratio
+<br />
+    FROM pg_stat_user_tables WHERE seq_scan &gt; $36 AND (seq_tup_read::numeric / NULLIF(idx_tup_fetch, $37)) &gt; $38
+<br />
+),
+<br />
+
+<br />
+v_fk_unindexed AS (
+<br />
+    SELECT n1.nspname || $39 || c1.relname as tbl, a1.attname as col 
+<br />
+    FROM pg_constraint t 
+<br />
+    JOIN pg_attribute a1 ON a1.attrelid=t.conrelid AND a1.attnum=t.conkey[$40] 
+<br />
+    JOIN pg_class c1 ON c1.oid=t.conrelid
+<br />
+    JOIN pg_namespace n1 ON n1.oid=c1.relnamespace
+<br />
+    WHERE t.contype=$41 AND NOT EXISTS (SELECT $42 FROM pg_index i WHERE i.indrelid=t.conrelid AND i.indkey[$43]=t.conkey[$44])
+<br />
+),
+<br />
+
+<br />
+v_fk_dup AS (
+<br />
+    SELECT conname, n.nspname || $45 || c.relname as tbl
+<br />
+    FROM pg_constraint t1 
+<br />
+    JOIN pg_class c ON t1.conrelid = c.oid
+<br />
+    JOIN pg_namespace n ON c.relnamespace = n.oid
+<br />
+    WHERE EXISTS (SELECT $46 FROM pg_constraint t2 WHERE t1.conrelid=t2.conrelid AND t1.conkey=t2.conkey AND t1.oid &lt;&gt; t2.oid AND t2.contype=$47) AND t1.contype=$48
+<br />
+),
+<br />
+
+<br />
+v_secu AS (
+<br />
+    SELECT rolname, rolsuper, CASE WHEN rolpassword IS NULL THEN $49 ELSE $50 END as pwd 
+<br />
+    FROM pg_roles WHERE rolname NOT LIKE $51
+<br />
+),
+<br />
+
+<br />
+v_funcs AS (
+<br />
+    SELECT n.nspname, p.proname, l.lanname, CASE WHEN p.prosecdef THEN $52 ELSE $53 END as sec
+<br />
+    FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid JOIN pg_language l ON p.prolang=l.oid
+<br />
+    WHERE n.nspname NOT IN ($54,$55) AND p.prosecdef
+<br />
+),
+<br />
+
+<br />
+v_seq AS (
+<br />
+    SELECT schemaname, sequencename, last_value, max_value, 
+<br />
+    round((last_value::numeric / NULLIF(max_value::numeric,$56)) * $57, $58) as pct
+<br />
+    FROM pg_sequences WHERE (last_value::numeric / NULLIF(max_value::numeric,$59)) &gt; $60
+<br />
+),
+<br />
+
+<br />
+v_empty_tbl AS (SELECT schemaname, relname FROM pg_stat_user_tables WHERE n_live_tup = $61),
+<br />
+
+<br />
+v_unused_tbl AS (SELECT schemaname, relname FROM pg_stat_user_tables WHERE (seq_tup_read + idx_tup_fetch + n_tup_ins + n_tup_upd + n_tup_del) = $62),
+<br />
+
+<br />
+v_single_col AS (
+<br />
+    SELECT table_schema, table_name FROM information_schema.columns 
+<br />
+    WHERE table_schema NOT IN ($63,$64) GROUP BY table_schema, table_name HAVING count(*) = $65
+<br />
+),
+<br />
+
+<br />
+v_useless_col AS (
+<br />
+    SELECT schemaname, tablename as relname, attname, null_frac 
+<br />
+    FROM pg_stats WHERE null_frac &gt; $66 AND schemaname NOT IN ($67,$68)
+<br />
+),
+<br />
+
+<br />
+v_av_tune AS (
+<br />
+    SELECT schemaname, relname, n_dead_tup, last_autovacuum 
+<br />
+    FROM pg_stat_user_tables 
+<br />
+    WHERE n_dead_tup &gt; (current_setting($69)::int + current_setting($70)::float * n_live_tup)
+<br />
+),
+<br />
+
+<br />
+v_slots AS (
+<br />
+    SELECT slot_name, active, restart_lsn FROM pg_replication_slots WHERE NOT active
+<br />
+),
+<br />
+
+<br />
+v_denorm AS (
+<br />
+    SELECT table_schema, table_name, substring(column_name FROM $71) as pattern, count(*) as cnt 
+<br />
+    FROM information_schema.columns WHERE column_name ~ $72 AND table_schema NOT IN ($73,$74)
+<br />
+    GROUP BY table_schema, table_name, substring(column_name FROM '^(.*)[0-9]+$') HAVING count(*) &gt; $75
+<br />
+),
+<br />
+
+<br />
+v_frag AS (
+<br />
+    SELECT n.nspname || $76 || t.relname as relname, a.attname, ty.typname 
+<br />
+    FROM pg_index i 
+<br />
+    JOIN pg_class t ON t.oid=i.indrelid 
+<br />
+    JOIN pg_namespace n ON t.relnamespace = n.oid
+<br />
+    JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=ANY(i.indkey) 
+<br />
+    JOIN pg_type ty ON a.atttypid=ty.oid
+<br />
+    WHERE i.indisprimary AND ty.typname IN ($77,$78,$79)
+<br />
+),
+<br />
+
+<br />
+v_too_many_idx AS (
+<br />
+    SELECT schemaname, relname, count(*) as cnt FROM pg_stat_user_indexes GROUP BY schemaname, relname HAVING count(*) &gt; $80
+<br />
+),
+<br />
+
+<br />
+html AS (
+<br />
+    SELECT $81 as val
+<br />
+    
+<br />
+    UNION ALL SELECT $82
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($83||object_name||$84||size||$85,$86) FROM v_unlogged),$87)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($88||schemaname||$89||tablename||$90||wasted||$91||tbloat||$92,$93) FROM v_bloat LIMIT $94),$95)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($96||relname||$97||typname||$98,$99) FROM v_frag),$100)
+<br />
+    UNION ALL SELECT $101
+<br />
+
+<br />
+    UNION ALL SELECT $102
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($103||tbl||$104||indexes||$105,$106) FROM v_idx_duplicate),$107)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($108||idx_candidate||$109||idx_keep||$110||size_saved||$111,$112) FROM v_idx_redundant),$113)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($114||schemaname||$115||relname||$116||indexrelname||$117||ratio||$118,$119) FROM v_idx_ineff),$120)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($121||schemaname||$122||relname||$123||indexrelname||$124||size||$125,$126) FROM v_idx_unused LIMIT $127),$128)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($129||schemaname||$130||relname||$131||cnt||$132,$133) FROM v_too_many_idx),$134)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($135||nspname||$136||relname||$137,$138) FROM v_idx_invalid),$139)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($140||schemaname||$141||relname||$142||seq_scan||$143,$144) FROM v_missing_idx LIMIT $145),$146)
+<br />
+    UNION ALL SELECT $147
+<br />
+
+<br />
+    UNION ALL SELECT $148
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($149||tbl||$150||col||$151,$152) FROM v_fk_unindexed),$153)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($154||tbl||$155||conname||$156,$157) FROM v_fk_dup),$158)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($159||table_schema||$160||table_name||$161||pattern||$162||cnt||$163,$164) FROM v_denorm),$165)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($166||schemaname||$167||relname||$168,$169) FROM v_empty_tbl LIMIT $170),$171)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($172||schemaname||$173||relname||$174,$175) FROM v_unused_tbl LIMIT $176),$177)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($178||table_schema||$179||table_name||$180,$181) FROM v_single_col),$182)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($183||schemaname||$184||relname||$185||attname||$186||(null_frac*$187)::int||$188,$189) FROM v_useless_col),$190)
+<br />
+    UNION ALL SELECT $191
+<br />
+
+<br />
+    UNION ALL SELECT $192
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($193||schemaname||$194||sequencename||$195||pct||$196,$197) FROM v_seq),$198)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($199||schemaname||$200||relname||$201||n_dead_tup||$202,$203) FROM v_av_tune),$204)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($205||slot_name||$206||restart_lsn||$207,$208) FROM v_slots),$209)
+<br />
+    UNION ALL SELECT $210
+<br />
+
+<br />
+    UNION ALL SELECT $211
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($212||rolname||$213||pwd||$214||rolsuper||$215,$216) FROM v_secu),$217)
+<br />
+    UNION ALL SELECT COALESCE((SELECT string_agg($218||nspname||$219||proname||$220,$221) FROM v_funcs),$222)
+<br />
+    UNION ALL SELECT $223
+<br />
+
+<br />
+    UNION ALL SELECT $224
+<br />
+)
+<br />
+SELECT string_agg(val, $225) FROM html</td>
+    <td align="right">1</td>
+    <td align="right">99.31</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">CREATE EXTENSION pg_stat_statements</td>
+    <td align="right">1</td>
+    <td align="right">96.11</td>
+    <td align="right">70</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round(total_exec_time::numeric, $2) AS &quot;Total (ms)&quot;,
+<br />
+    round(($3 * total_exec_time / SUM(total_exec_time) OVER())::numeric, $4) AS &quot;PCT Charge&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY calls DESC 
+<br />
+LIMIT $5</td>
+    <td align="right">7</td>
+    <td align="right">100.00</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    pg_size_pretty(wal_bytes) AS &quot;Total WAL&quot;,
+<br />
+    round((wal_bytes / NULLIF(calls, $1))::numeric, $2) AS &quot;Bytes / Appel&quot;,
+<br />
+    wal_records AS &quot;WAL Records&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY wal_bytes DESC 
+<br />
+LIMIT $3</td>
+    <td align="right">7</td>
+    <td align="right">100.00</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(total_exec_time::numeric, $1) AS &quot;Total (ms)&quot;,
+<br />
+    round((total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time))::numeric, $2) AS &quot;CPU Time (ms)&quot;,
+<br />
+    round(($3 * (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) / NULLIF(total_exec_time, $4))::numeric, $5) AS &quot;PCT CPU&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE calls &gt; $6
+<br />
+ORDER BY (total_exec_time - (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)) DESC 
+<br />
+LIMIT $7</td>
+    <td align="right">7</td>
+    <td align="right">100.00</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT $1 FROM pg_database WHERE datname = $2</td>
+    <td align="right">1</td>
+    <td align="right">100.00</td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(total_plan_time::numeric, $1) AS &quot;Total Plan (ms)&quot;,
+<br />
+    round(mean_plan_time::numeric, $2) AS &quot;Moy Plan (ms)&quot;,
+<br />
+    round((total_plan_time / NULLIF(total_exec_time + total_plan_time, $3) * $4)::numeric, $5) AS &quot;PCT Planning&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE plans &gt; $6
+<br />
+ORDER BY total_plan_time DESC
+<br />
+LIMIT $7</td>
+    <td align="right">7</td>
+    <td align="right">&nbsp; </td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT 
+<br />
+    query AS &quot;Requete (Cliquer)&quot;,
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(($1 * shared_blks_hit / NULLIF(shared_blks_hit + shared_blks_read, $2)), $3) AS &quot;Cache Hit PCT&quot;,
+<br />
+    (shared_blks_dirtied + local_blks_dirtied) AS &quot;Blocks Salis&quot;
+<br />
+FROM pg_stat_statements
+<br />
+ORDER BY (shared_blks_hit + shared_blks_read) DESC
+<br />
+LIMIT $4</td>
+    <td align="right">6</td>
+    <td align="right">&nbsp; </td>
+    <td align="right">0</td>
+  </tr>
+  <tr valign="top">
+    <td align="left">SELECT
+<br />
+    query AS &quot;Requete (Cliquer)&quot;, 
+<br />
+    calls AS &quot;Appels&quot;,
+<br />
+    round(mean_exec_time::numeric, $1) AS &quot;Moyenne (ms)&quot;,
+<br />
+    round((shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time)::numeric, $2) AS &quot;IO Wait (ms)&quot;,
+<br />
+    round(($3 * (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) / NULLIF(total_exec_time, $4))::numeric, $5) AS &quot;PCT IO&quot;
+<br />
+FROM pg_stat_statements
+<br />
+WHERE (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) &gt; $6
+<br />
+ORDER BY (shared_blk_read_time + shared_blk_write_time + local_blk_read_time + local_blk_write_time + temp_blk_read_time + temp_blk_write_time) DESC 
+<br />
+LIMIT $7</td>
+    <td align="right">7</td>
+    <td align="right">&nbsp; </td>
+    <td align="right">0</td>
+  </tr>
+</table>
+
+<h2 id="jit" data-i18n="h2_jit">10. Surcharge JIT</h2>
+<table border="0" class="data-table">
+  <tr>
+    <th align="center">Requete (Cliquer)</th>
+    <th align="center">Appels</th>
+    <th align="center">Moyenne (ms)</th>
+    <th align="center">JIT Overhead (ms)</th>
+  </tr>
+</table>
+
+<h2 id="info" data-i18n="h2_info">11. Sante Globale</h2>
+<table border="0" class="data-table">
+  <tr>
+    <th align="center">Deallocations</th>
+    <th align="center">Dernier Reset</th>
+  </tr>
+  <tr valign="top">
+    <td align="right">0</td>
+    <td align="left">2026-05-02 21:03:35.706475+00</td>
+  </tr>
+</table>
+
+<button id="backToTop" onclick="scrollToTop()" title="Retour en haut"><svg class="icon" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg></button>
+<script>
+let currentLang = fr;
+const translations = {
+fr: {
+title: "Rapport Performance PostgreSQL",
+nav_title: "Navigation Rapide :",
+nav_cpu: "1. Top CPU", nav_io: "2. Top IO", nav_plan: "3. Planning Time", nav_wal: "4. Top WAL", nav_freq: "5. Frequence",
+nav_heavy: "6. Lourdes", nav_jitter: "7. Jitter", nav_temp: "8. Temp Files", nav_cache: "9. Cache Miss", nav_jit: "10. JIT", nav_info: "11. Info",
+h2_cpu: "1. Top Consommateurs CPU (Hors IO)", p_cpu: "Charge processeur pure (Total Time - IO Time).",
+h2_io: "2. Top IO (Latence Disque)", p_io: "Attente disque (lecture/ecriture).",
+h2_plan: "3. Temps de Planification", p_plan: "N&eacute;cessite track_planning = on.",
+h2_wal: "4. Top G&eacute;n&eacute;rateurs de WAL", p_wal: "Ecritures journaux (pression checkpoint).",
+h2_freq: "5. Haute Fr&eacute;quence", p_freq: "Requ&ecirc;tes rapides mais massives.",
+h2_heavy: "6. Lourdes (Candidats Parall&eacute;lisme)", p_heavy: "Les plus longues en temps absolu.",
+h2_jitter: "7. Instabilit&eacute; (Jitter)", p_jitter: "Ecart-type &eacute;lev&eacute; (plans instables).",
+h2_temp: "8. Temp Files (Disk Spill)", p_temp: "Manque de work_mem.",
+h2_cache: "9. Cache Miss et Blocs Salis", p_cache: "Pression sur le buffer pool (RAM).",
+h2_jit: "10. Surcharge JIT", h2_info: "11. Sant&eacute; Globale",
+"Requete (Cliquer)": "Query (Click)", "Appels": "Calls", "Total (ms)": "Total (ms)", "CPU Time (ms)": "CPU Time (ms)", "PCT CPU": "PCT CPU",
+"Moyenne (ms)": "Average (ms)", "IO Wait (ms)": "IO Wait (ms)", "PCT IO": "PCT IO", "Total Plan (ms)": "Total Plan (ms)",
+"Moy Plan (ms)": "Avg Plan (ms)", "PCT Planning": "PCT Planning", "Total WAL": "Total WAL", "Bytes / Appel": "Bytes / Call",
+"WAL Records": "WAL Records", "PCT Charge": "PCT Load", "Total Time (ms)": "Total Time (ms)", "Lignes Totales": "Total Rows",
+"Ecart-Type (ms)": "Stddev (ms)", "Ratio Var.": "Var. Ratio", "Blks Written": "Blks Written", "Total Temp Size": "Total Temp Size",
+"Blks / Appel": "Blks / Call", "Cache Hit PCT": "Cache Hit PCT", "Blocks Salis": "Dirtied Blocks", "JIT Overhead (ms)": "JIT Overhead (ms)",
+"Deallocations": "Deallocations", "Dernier Reset": "Last Reset", "timestamp_prefix": "G&eacute;n&eacute;r&eacute; le: ", "back_to_top": "Retour en haut"
+},
+en: {
+title: "PostgreSQL Performance Report",
+nav_title: "Quick Navigation:",
+nav_cpu: "1. Top CPU", nav_io: "2. Top IO", nav_plan: "3. Planning Time", nav_wal: "4. Top WAL", nav_freq: "5. Frequency",
+nav_heavy: "6. Heavy Queries", nav_jitter: "7. Jitter", nav_temp: "8. Temp Files", nav_cache: "9. Cache Miss", nav_jit: "10. JIT", nav_info: "11. Info",
+h2_cpu: "1. Top CPU Consumers (Excl. IO)", p_cpu: "Pure processor load (Total Time - IO Time).",
+h2_io: "2. Top IO (Disk Latency)", p_io: "Disk wait (read/write).",
+h2_plan: "3. Planning Time", p_plan: "Requires track_planning = on.",
+h2_wal: "4. Top WAL Generators", p_wal: "Journal writes (checkpoint pressure).",
+h2_freq: "5. High Frequency", p_freq: "Fast but massive query volume.",
+h2_heavy: "6. Heavy Queries (Parallel Candidates)", p_heavy: "Longest absolute execution times.",
+h2_jitter: "7. Instability (Jitter)", p_jitter: "High standard deviation (unstable plans).",
+h2_temp: "8. Temp Files (Disk Spill)", p_temp: "Insufficient work_mem.",
+h2_cache: "9. Cache Miss & Dirtied Blocks", p_cache: "Pressure on buffer pool (RAM).",
+h2_jit: "10. JIT Overhead", h2_info: "11. Global Health",
+"Requete (Cliquer)": "Query (Click)", "Appels": "Calls", "Total (ms)": "Total (ms)", "CPU Time (ms)": "CPU Time (ms)", "PCT CPU": "PCT CPU",
+"Moyenne (ms)": "Average (ms)", "IO Wait (ms)": "IO Wait (ms)", "PCT IO": "PCT IO", "Total Plan (ms)": "Total Plan (ms)",
+"Moy Plan (ms)": "Avg Plan (ms)", "PCT Planning": "PCT Planning", "Total WAL": "Total WAL", "Bytes / Appel": "Bytes / Call",
+"WAL Records": "WAL Records", "PCT Charge": "PCT Load", "Total Time (ms)": "Total Time (ms)", "Lignes Totales": "Total Rows",
+"Ecart-Type (ms)": "Stddev (ms)", "Ratio Var.": "Var. Ratio", "Blks Written": "Blks Written", "Total Temp Size": "Total Temp Size",
+"Blks / Appel": "Blks / Call", "Cache Hit PCT": "Cache Hit PCT", "Blocks Salis": "Dirtied Blocks", "JIT Overhead (ms)": "JIT Overhead (ms)",
+"Deallocations": "Deallocations", "Dernier Reset": "Last Reset", "timestamp_prefix": "Generated on: ", "back_to_top": "Back to Top"
+}
+};
+
+function toggleLanguage() {
+currentLang = currentLang === fr ? en : fr;
+document.getElementById(lang-text).innerText = currentLang === fr ? EN : FR;
+updateUI();
+}
+
+function updateUI() {
+document.querySelectorAll([data-i18n]).forEach(el => {
+const key = el.getAttribute(data-i18n);
+if (translations[currentLang][key]) el.innerHTML = translations[currentLang][key];
+});
+}
+
+function toggleTheme() {
+const body = document.body;
+const icon = document.getElementById(theme-icon);
+const text = document.getElementById(theme-text);
+body.classList.toggle(light-mode);
+if (body.classList.contains(light-mode)) {
+icon.innerHTML = <svg class="icon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>;
+text.innerText = currentLang === fr ? Mode Sombre : Dark Mode;
+} else {
+icon.innerHTML = <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>;
+text.innerText = currentLang === fr ? Mode Clair : Light Mode;
+}
+}
+
+function scrollToTop() {
+window.scrollTo({ top: 0, behavior: smooth });
+}
+
+window.onscroll = function() {
+const btn = document.getElementById("backToTop");
+if (document.body.scrollTop > 500 || document.documentElement.scrollTop > 500) {
+btn.style.display = "flex";
+} else {
+btn.style.display = "none";
+}
+};
+
+document.addEventListener("DOMContentLoaded", function() {
+var cells = document.querySelectorAll("td:first-child");
+cells.forEach(function(cell) {
+var content = cell.innerHTML;
+cell.innerHTML = <div class="query-content"> + content + </div>;
+cell.title = currentLang === fr ? "Cliquez pour voir la requ??te compl??te" : "Click to see full query";
+cell.addEventListener("click", function() {
+this.querySelector(.query-content).classList.toggle("expanded");
+});
+});
+updateUI();
+});
+
+// Override updateUI to also translate table headers generated by psql
+const originalUpdateUI = updateUI;
+updateUI = function() {
+originalUpdateUI();
+document.querySelectorAll(th).forEach(th => {
+const text = th.innerText.trim();
+if (translations[currentLang][text]) {
+th.innerHTML = translations[currentLang][text];
+}
+});
+};
+</script>
+<div class="timestamp"><span data-i18n="timestamp_prefix">G&eacute;n&eacute;r&eacute; le: </span> <script>document.write(new Date().toLocaleString())</script></div>
+</body>
+</html>

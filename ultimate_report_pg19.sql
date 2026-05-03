@@ -1,4 +1,4 @@
-\set QUIET on
+﻿\set QUIET on
 \encoding UTF8
 \pset format unaligned
 \pset tuples_only on
@@ -28,19 +28,11 @@ v_db_info AS (
 v_archiving AS (
   SELECT 
     CASE WHEN NOT has_table_privilege('pg_stat_archiver', 'select') THEN 'PERMISSION_DENIED' 
-         WHEN archived_count IS NULL THEN 'ARCHIVING_DISABLED'
-         WHEN failed_count > 0 THEN 'FAILURES'
-         ELSE 'OK'
+         ELSE (SELECT CASE WHEN archived_count IS NULL THEN 'ARCHIVING_DISABLED' WHEN failed_count > 0 THEN 'FAILURES' ELSE 'OK' END FROM pg_stat_archiver)
     END as status,
-    COALESCE(archived_count, 0) as archived_count,
-    COALESCE(failed_count, 0) as failed_count,
-    COALESCE(to_char(last_failed_time, 'DD/MM HH24:MI'), 'N/A') as last_fail
-  FROM (
-    SELECT * FROM pg_stat_archiver 
-    WHERE has_table_privilege('pg_stat_archiver', 'select')
-    UNION ALL
-    SELECT 0, 0, NULL WHERE NOT has_table_privilege('pg_stat_archiver', 'select')
-  ) a
+    CASE WHEN has_table_privilege('pg_stat_archiver', 'select') THEN (SELECT COALESCE(archived_count, 0) FROM pg_stat_archiver) ELSE 0 END as archived_count,
+    CASE WHEN has_table_privilege('pg_stat_archiver', 'select') THEN (SELECT COALESCE(failed_count, 0) FROM pg_stat_archiver) ELSE 0 END as failed_count,
+    CASE WHEN has_table_privilege('pg_stat_archiver', 'select') THEN (SELECT COALESCE(to_char(last_failed_time, 'DD/MM HH24:MI'), 'N/A') FROM pg_stat_archiver) ELSE 'N/A' END as last_fail
 ),
 
 v_repl AS (
@@ -69,8 +61,8 @@ v_slots AS (
     slot_type,
     CASE WHEN active THEN 'ACTIVE' ELSE 'INACTIVE' END as status,
     pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) as wal_retained,
-    CASE WHEN NOT active AND pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) > 1073741824 THEN '🔴 CRITICAL'
-         WHEN NOT active THEN '🟡 WARNING'
+    CASE WHEN NOT active AND pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) > 1073741824 THEN '[CRITICAL]'
+         WHEN NOT active THEN '[WARNING]'
          ELSE 'OK'
     END as risk
   FROM pg_replication_slots
@@ -133,8 +125,8 @@ v_missing_idx AS (
 v_wrap AS (
   SELECT datname, age(datfrozenxid) as xid_age, 
     ROUND((100 * age(datfrozenxid) / NULLIF(current_setting('autovacuum_freeze_max_age')::bigint, 0))::numeric, 1) as pct,
-    CASE WHEN age(datfrozenxid) > (0.9 * current_setting('autovacuum_freeze_max_age')::bigint) THEN '🔴 CRITICAL'
-         WHEN age(datfrozenxid) > (0.75 * current_setting('autovacuum_freeze_max_age')::bigint) THEN '🟠 WARNING'
+    CASE WHEN age(datfrozenxid) > (0.9 * current_setting('autovacuum_freeze_max_age')::bigint) THEN '[CRITICAL]'
+         WHEN age(datfrozenxid) > (0.75 * current_setting('autovacuum_freeze_max_age')::bigint) THEN '[WARNING]'
          ELSE 'OK'
     END as status
   FROM pg_database 
@@ -170,7 +162,7 @@ v_secu AS (
          WHEN rolpassword LIKE '%md5%' THEN 'MD5_WEAK'
          ELSE 'OTHER'
     END as pwd_status,
-    CASE WHEN rolsuper OR rolcreaterole OR rolreplication THEN '⚠️ HIGH' ELSE 'OK' END as risk
+    CASE WHEN rolsuper OR rolcreaterole OR rolreplication THEN 'HIGH' ELSE 'OK' END as risk
   FROM pg_roles 
   WHERE rolname NOT LIKE 'pg_%'
 ),
@@ -178,7 +170,7 @@ v_secu AS (
 v_seq AS (
   SELECT schemaname, sequencename, last_value, max_value, 
     ROUND((last_value::numeric / NULLIF(max_value::numeric,0)) * 100, 1) as pct_used,
-    CASE WHEN last_value::numeric / NULLIF(max_value::numeric, 0) > 0.95 THEN '🔴 CRITICAL'
+    CASE WHEN last_value::numeric / NULLIF(max_value::numeric, 0) > 0.95 THEN '[CRITICAL]'
          ELSE 'OK'
     END as status
   FROM pg_sequences 
@@ -193,8 +185,8 @@ v_checksum_status AS (
 
 v_settings AS (
   SELECT name, setting, unit,
-    CASE WHEN name = 'fsync' AND setting = 'off' THEN '🔴 CRITICAL: DATA LOSS'
-         WHEN name = 'full_page_writes' AND setting = 'off' THEN '🔴 CRITICAL: CORRUPTION'
+    CASE WHEN name = 'fsync' AND setting = 'off' THEN '[CRITICAL]: DATA LOSS'
+         WHEN name = 'full_page_writes' AND setting = 'off' THEN '[CRITICAL]: CORRUPTION'
          ELSE 'OK'
     END as risk
   FROM pg_settings
@@ -216,6 +208,7 @@ html AS (
 <meta charset="UTF-8">
 <title>Ultimate PostgreSQL Audit Report (PG ' || (SELECT ver FROM v_ver) || ')</title>
 <style>
+  .pg-version-badge { background: var(--primary); color: #000; padding: 4px 12px; border-radius: 6px; font-weight: 800; font-size: 0.9rem; margin-left: 15px; vertical-align: middle; -webkit-text-fill-color: initial; display: inline-block; }
     @import url(''https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap'');
     :root {
         --bg: #0f172a; --card-bg: #1e293b; --primary: #38bdf8; --secondary: #64748b;
@@ -256,7 +249,7 @@ html AS (
 <div class="container">
     <header>
         <div>
-            <h1 data-i18n="title">PostgreSQL Ultimate Audit (PG19+ Enhanced)</h1>
+            <h1 data-i18n="title">PostgreSQL Ultimate Audit (PG19+ Enhanced) <span class="pg-version-badge">' || current_setting('server_version') || '</span></h1>
             <div class="meta">
                 <span><span data-i18n="gen_on">G&eacute;n&eacute;r&eacute; le</span> ' || to_char(now(), 'DD/MM/YYYY') || ' &agrave; ' || to_char(now(), 'HH24:MI') || '</span>
                 <span class="pg-badge">PG ' || (SELECT ver FROM v_ver) || '</span>
@@ -326,7 +319,7 @@ html AS (
     UNION ALL SELECT '</table></div>'
     
     UNION ALL SELECT '
-    <button id="backToTop" onclick="window.scrollTo({top:0, behavior:''smooth''})">↑</button>
+    <button id="backToTop" onclick="window.scrollTo({top:0, behavior:''smooth''})"><svg class="icon" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg></button>
     <script>
     const icons = {
         sun: `<svg class="icon"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>`,
@@ -374,3 +367,4 @@ html AS (
     </div></body></html>'
 )
 SELECT string_agg(val, '') FROM html;
+
