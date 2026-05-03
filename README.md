@@ -19,8 +19,9 @@ Standardized and modernized PostgreSQL assessment reports featuring a premium "D
 
 ## 📄 Report Overview
 
-### 1. `pg17_perf_report.sql`
-A comprehensive performance dashboard optimized for **PostgreSQL 17**.
+### 1. `pg_perf_report.sql`
+A comprehensive performance dashboard optimized for modern PostgreSQL versions.
+- **Dynamic Monitoring**: Automatically detects the server version and adjusts labels.
 - **Metrics**: Top CPU consumers, Disk I/O latency, WAL generation, Planning time, Jitter, and JIT overhead.
 - **Goal**: Identify query-level bottlenecks with precision.
 
@@ -50,8 +51,8 @@ To generate a professional HTML report without SQL metadata or extraneous charac
 ### Example Commands:
 
 ```bash
-# Performance Report (PG17+)
-psql -A -t -q -d [db] -f pg17_perf_report.sql -o perf_report.html
+# Performance Report (Modern PG)
+psql -A -t -q -d [db] -f pg_perf_report.sql -o perf_report.html
 
 # Ultimate Health Audit (PG12-18)
 psql -A -t -q -d [db] -f ultimate_report.sql -o audit_report.html

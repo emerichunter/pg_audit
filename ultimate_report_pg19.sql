@@ -105,7 +105,7 @@ html AS (
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<title>Ultimate PostgreSQL Audit Report (PG19+)</title>
+<title>Ultimate PostgreSQL Audit Report (PG ' || (SELECT ver FROM v_ver) || ')</title>
 <style>
     @import url(''https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap'');
     :root {

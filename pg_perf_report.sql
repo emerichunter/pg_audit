@@ -4,11 +4,14 @@
 \pset border 0
 \pset footer off
 
+-- Get dynamic version
+SELECT current_setting('server_version') as pg_version \gset
+
 \qecho <!DOCTYPE html>
 \qecho <html lang="fr">
 \qecho <head>
 \qecho <meta charset="UTF-8">
-\qecho <title>Rapport Performance PostgreSQL 17</title>
+\qecho <title>Rapport Performance PostgreSQL :pg_version</title>
 \qecho <style>
 \qecho   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 \qecho   
@@ -26,6 +29,7 @@
 \qecho   
 \qecho   .header-container { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; }
 \qecho   h1 { color: var(--text); font-size: 2.5rem; background: linear-gradient(135deg, var(--primary), #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; border-bottom: none; margin: 0; font-weight: 800; letter-spacing: -0.02em; }
+\qecho   .pg-version-badge { background: var(--primary); color: #000; padding: 4px 12px; border-radius: 6px; font-weight: 800; font-size: 0.9rem; margin-left: 15px; vertical-align: middle; }
 \qecho   
 \qecho   /* Theme Switch */
 \qecho   .theme-switch { background: var(--surface); border: 1px solid var(--border); padding: 8px 16px; border-radius: 50px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.85rem; color: var(--text); transition: all 0.3s; }
@@ -66,7 +70,9 @@
 \qecho </head>
 \qecho <body>
 \qecho <div class="header-container">
-\qecho   <h1 data-i18n="title">Rapport Audit Complet (PG 17)</h1>
+\qecho   <div>
+\qecho     <h1 data-i18n="title">Rapport Performance PostgreSQL <span class="pg-version-badge">:pg_version</span></h1>
+\qecho   </div>
 \qecho   <div style="display: flex; gap: 10px;">
 \qecho     <button class="theme-switch" onclick="toggleLanguage()">
 \qecho       <span id="lang-icon">🌍</span> <span id="lang-text">EN</span>
@@ -242,7 +248,7 @@ FROM pg_stat_statements_info;
 \qecho let currentLang = 'fr';
 \qecho const translations = {
 \qecho   fr: {
-\qecho     title: "Rapport Audit Complet (PG 17)",
+\qecho     title: "Rapport Performance PostgreSQL",
 \qecho     nav_title: "Navigation Rapide :",
 \qecho     nav_cpu: "1. Top CPU", nav_io: "2. Top IO", nav_plan: "3. Planning Time", nav_wal: "4. Top WAL", nav_freq: "5. Frequence",
 \qecho     nav_heavy: "6. Lourdes", nav_jitter: "7. Jitter", nav_temp: "8. Temp Files", nav_cache: "9. Cache Miss", nav_jit: "10. JIT", nav_info: "11. Info",
@@ -265,7 +271,7 @@ FROM pg_stat_statements_info;
 \qecho     "Deallocations": "Deallocations", "Dernier Reset": "Last Reset", "timestamp_prefix": "Généré le: ", "back_to_top": "Retour en haut"
 \qecho   },
 \qecho   en: {
-\qecho     title: "Complete Audit Report (PG 17)",
+\qecho     title: "PostgreSQL Performance Report",
 \qecho     nav_title: "Quick Navigation:",
 \qecho     nav_cpu: "1. Top CPU", nav_io: "2. Top IO", nav_plan: "3. Planning Time", nav_wal: "4. Top WAL", nav_freq: "5. Frequency",
 \qecho     nav_heavy: "6. Heavy Queries", nav_jitter: "7. Jitter", nav_temp: "8. Temp Files", nav_cache: "9. Cache Miss", nav_jit: "10. JIT", nav_info: "11. Info",
@@ -300,19 +306,6 @@ FROM pg_stat_statements_info;
 \qecho     const key = el.getAttribute('data-i18n');
 \qecho     if (translations[currentLang][key]) el.innerText = translations[currentLang][key];
 \qecho   });
-\qecho   
-\qecho   document.querySelectorAll('th').forEach(th => {
-\qecho     const text = th.innerText.trim();
-\qecho     for (const [fr, en] of Object.entries(translations.fr)) {
-\qecho       if (text === (currentLang === 'en' ? fr : en)) {
-\qecho         th.innerText = translations[currentLang][fr] || text;
-\qecho         break;
-\qecho       }
-\qecho     }
-\qecho   });
-\qecho   
-\qecho   const btt = document.getElementById('backToTop');
-\qecho   if (btt) btt.title = translations[currentLang].back_to_top;
 \qecho }
 \qecho
 \qecho function toggleTheme() {
