@@ -19,10 +19,12 @@
 \pset tuples_only on
 \pset pager off
 
--- Detect version for conditional bgwriter/checkpointer branching
+-- Version detection — gates stat_statements, bgwriter, progress_vacuum, stat_statements_info
 SELECT
   (current_setting('server_version_num')::int / 10000) AS major_ver,
-  (current_setting('server_version_num')::int >= 170000) AS is_pg17
+  (current_setting('server_version_num')::int >= 170000) AS is_pg17,
+  (current_setting('server_version_num')::int >= 140000) AS is_pg14,
+  (current_setting('server_version_num')::int >= 130000) AS is_pg13
 \gset
 
 WITH
@@ -30,22 +32,71 @@ WITH
 -- ---------------------------------------------------------------------------
 meta AS (
   SELECT json_build_object(
-    'type',           'zk_stat_dump',
-    'version',        '1.0',
-    'generated_at',   now(),
-    'pg_version',     version(),
-    'pg_version_num', current_setting('server_version_num')::int,
-    'database',       current_database(),
-    'pg_uptime',      now() - pg_postmaster_start_time(),
-    'stats_reset_global', (SELECT stats_reset FROM pg_stat_bgwriter)
+    'type',              'zk_stat_dump',
+    'version',           '1.2',
+    'generated_at',      now(),
+    'pg_version',        version(),
+    'pg_version_num',    current_setting('server_version_num')::int,
+    'database',          current_database(),
+    'pg_uptime',         now() - pg_postmaster_start_time(),
+    'stats_reset_global',(SELECT stats_reset FROM pg_stat_bgwriter),
+    -- Cluster role: mirrors pg_is_in_recovery() used by v_repl in ultimate_report
+    'is_in_recovery',    pg_is_in_recovery(),
+    'cluster_role',      CASE WHEN pg_is_in_recovery() THEN 'STANDBY' ELSE 'PRIMARY' END,
+    'current_wal_lsn',   pg_current_wal_lsn()::text
   ) AS v
 ),
 
 -- ---------------------------------------------------------------------------
--- pg_stat_statements — query performance fingerprints
--- NOTE: query text is included; omit 'query' field if full anonymity is needed
--- PG17 renamed blk_read_time/blk_write_time → shared_blk_read_time/shared_blk_write_time
+-- pg_stat_statements — 4 version branches (PG12 / PG13 / PG14-16 / PG17+)
+--   PG12: total_time/mean_time/stddev_time, blk_read_time, no plan/wal/jit
+--   PG13: +exec suffix rename, +wal_records/wal_bytes, +plan time
+--   PG14-16: +jit_functions/generation_time, +toplevel, still blk_read_time
+--   PG17+: shared_blk_read_time + local/temp variants
 \if :is_pg17
+stat_statements AS (
+  SELECT CASE
+    WHEN EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements')
+    THEN (
+      SELECT json_agg(json_build_object(
+        'queryid',               queryid,
+        'query',                 query,
+        'calls',                 calls,
+        'total_exec_time',       round(total_exec_time::numeric, 2),
+        'mean_exec_time',        round(mean_exec_time::numeric, 2),
+        'stddev_exec_time',      round(stddev_exec_time::numeric, 2),
+        'min_exec_time',         round(min_exec_time::numeric, 2),
+        'max_exec_time',         round(max_exec_time::numeric, 2),
+        'rows',                  rows,
+        'shared_blks_hit',       shared_blks_hit,
+        'shared_blks_read',      shared_blks_read,
+        'shared_blks_dirtied',   shared_blks_dirtied,
+        'shared_blks_written',   shared_blks_written,
+        'local_blks_hit',        local_blks_hit,
+        'local_blks_read',       local_blks_read,
+        'temp_blks_read',        temp_blks_read,
+        'temp_blks_written',     temp_blks_written,
+        'shared_blk_read_time',  round(shared_blk_read_time::numeric, 2),
+        'shared_blk_write_time', round(shared_blk_write_time::numeric, 2),
+        'local_blk_read_time',   round(local_blk_read_time::numeric, 2),
+        'local_blk_write_time',  round(local_blk_write_time::numeric, 2),
+        'temp_blk_read_time',    round(temp_blk_read_time::numeric, 2),
+        'temp_blk_write_time',   round(temp_blk_write_time::numeric, 2),
+        'wal_records',           wal_records,
+        'wal_bytes',             wal_bytes,
+        'total_plan_time',       round(total_plan_time::numeric, 2),
+        'jit_functions',         jit_functions,
+        'jit_generation_time',   round(jit_generation_time::numeric, 2),
+        'toplevel',              toplevel,
+        'stats_since',           stats_since
+      ) ORDER BY total_exec_time DESC)
+      FROM pg_stat_statements
+    )
+    ELSE NULL
+  END AS v
+),
+\elif :is_pg14
+-- PG14-16: exec suffix, blk_read_time (old name), WAL, plan time, JIT, toplevel
 stat_statements AS (
   SELECT CASE
     WHEN EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements')
@@ -68,12 +119,8 @@ stat_statements AS (
         'local_blks_read',     local_blks_read,
         'temp_blks_read',      temp_blks_read,
         'temp_blks_written',   temp_blks_written,
-        'shared_blk_read_time',  round(shared_blk_read_time::numeric, 2),
-        'shared_blk_write_time', round(shared_blk_write_time::numeric, 2),
-        'local_blk_read_time',   round(local_blk_read_time::numeric, 2),
-        'local_blk_write_time',  round(local_blk_write_time::numeric, 2),
-        'temp_blk_read_time',    round(temp_blk_read_time::numeric, 2),
-        'temp_blk_write_time',   round(temp_blk_write_time::numeric, 2),
+        'blk_read_time',       round(blk_read_time::numeric, 2),
+        'blk_write_time',      round(blk_write_time::numeric, 2),
         'wal_records',         wal_records,
         'wal_bytes',           wal_bytes,
         'total_plan_time',     round(total_plan_time::numeric, 2),
@@ -86,38 +133,68 @@ stat_statements AS (
     ELSE NULL
   END AS v
 ),
-\else
+\elif :is_pg13
+-- PG13: exec suffix rename, WAL columns, plan time — no JIT in pss, no toplevel
 stat_statements AS (
   SELECT CASE
     WHEN EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements')
     THEN (
       SELECT json_agg(json_build_object(
-        'queryid',           queryid,
-        'query',             query,
-        'calls',             calls,
-        'total_exec_time',   round(total_exec_time::numeric, 2),
-        'mean_exec_time',    round(mean_exec_time::numeric, 2),
-        'stddev_exec_time',  round(stddev_exec_time::numeric, 2),
-        'min_exec_time',     round(min_exec_time::numeric, 2),
-        'max_exec_time',     round(max_exec_time::numeric, 2),
-        'rows',              rows,
-        'shared_blks_hit',   shared_blks_hit,
-        'shared_blks_read',  shared_blks_read,
+        'queryid',             queryid,
+        'query',               query,
+        'calls',               calls,
+        'total_exec_time',     round(total_exec_time::numeric, 2),
+        'mean_exec_time',      round(mean_exec_time::numeric, 2),
+        'stddev_exec_time',    round(stddev_exec_time::numeric, 2),
+        'min_exec_time',       round(min_exec_time::numeric, 2),
+        'max_exec_time',       round(max_exec_time::numeric, 2),
+        'rows',                rows,
+        'shared_blks_hit',     shared_blks_hit,
+        'shared_blks_read',    shared_blks_read,
         'shared_blks_dirtied', shared_blks_dirtied,
         'shared_blks_written', shared_blks_written,
-        'local_blks_hit',    local_blks_hit,
-        'local_blks_read',   local_blks_read,
-        'temp_blks_read',    temp_blks_read,
-        'temp_blks_written', temp_blks_written,
-        'blk_read_time',     round(blk_read_time::numeric, 2),
-        'blk_write_time',    round(blk_write_time::numeric, 2),
-        'wal_records',       wal_records,
-        'wal_bytes',         wal_bytes,
-        'total_plan_time',   CASE WHEN :major_ver >= 13 THEN round(total_plan_time::numeric, 2) END,
-        'jit_functions',     CASE WHEN :major_ver >= 11 THEN jit_functions END,
-        'jit_generation_time', CASE WHEN :major_ver >= 11 THEN round(jit_generation_time::numeric, 2) END,
-        'toplevel',          CASE WHEN :major_ver >= 14 THEN toplevel END
+        'local_blks_hit',      local_blks_hit,
+        'local_blks_read',     local_blks_read,
+        'temp_blks_read',      temp_blks_read,
+        'temp_blks_written',   temp_blks_written,
+        'blk_read_time',       round(blk_read_time::numeric, 2),
+        'blk_write_time',      round(blk_write_time::numeric, 2),
+        'wal_records',         wal_records,
+        'wal_bytes',           wal_bytes,
+        'total_plan_time',     round(total_plan_time::numeric, 2)
       ) ORDER BY total_exec_time DESC)
+      FROM pg_stat_statements
+    )
+    ELSE NULL
+  END AS v
+),
+\else
+-- PG12: old column names, no plan time, no WAL columns, no JIT in pss
+stat_statements AS (
+  SELECT CASE
+    WHEN EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements')
+    THEN (
+      SELECT json_agg(json_build_object(
+        'queryid',             queryid,
+        'query',               query,
+        'calls',               calls,
+        'total_exec_time',     round(total_time::numeric, 2),
+        'mean_exec_time',      round(mean_time::numeric, 2),
+        'stddev_exec_time',    round(stddev_time::numeric, 2),
+        'min_exec_time',       round(min_time::numeric, 2),
+        'max_exec_time',       round(max_time::numeric, 2),
+        'rows',                rows,
+        'shared_blks_hit',     shared_blks_hit,
+        'shared_blks_read',    shared_blks_read,
+        'shared_blks_dirtied', shared_blks_dirtied,
+        'shared_blks_written', shared_blks_written,
+        'local_blks_hit',      local_blks_hit,
+        'local_blks_read',     local_blks_read,
+        'temp_blks_read',      temp_blks_read,
+        'temp_blks_written',   temp_blks_written,
+        'blk_read_time',       round(blk_read_time::numeric, 2),
+        'blk_write_time',      round(blk_write_time::numeric, 2)
+      ) ORDER BY total_time DESC)
       FROM pg_stat_statements
     )
     ELSE NULL
@@ -141,7 +218,7 @@ stat_tables AS (
     'n_live_tup',          n_live_tup,
     'n_dead_tup',          n_dead_tup,
     'n_mod_since_analyze', n_mod_since_analyze,
-    'n_ins_since_vacuum',  n_ins_since_vacuum,
+    'n_ins_since_vacuum',  CASE WHEN :major_ver >= 13 THEN n_ins_since_vacuum END,
     'last_vacuum',         last_vacuum,
     'last_autovacuum',     last_autovacuum,
     'last_analyze',        last_analyze,
@@ -475,6 +552,9 @@ stat_user_functions AS (
 
 -- ---------------------------------------------------------------------------
 -- Active vacuum / analyze progress (in-flight operations)
+-- PG17+: indexes_total / indexes_processed added; max_dead_tuple_bytes renamed
+-- PG12-16: max_dead_tuples / num_dead_tuples (old names)
+\if :is_pg17
 stat_progress_vacuum AS (
   SELECT json_agg(json_build_object(
     'pid',                 pid,
@@ -490,6 +570,23 @@ stat_progress_vacuum AS (
   ) ORDER BY pid) AS v
   FROM pg_stat_progress_vacuum
 ),
+\else
+stat_progress_vacuum AS (
+  SELECT json_agg(json_build_object(
+    'pid',                 pid,
+    'datname',             datname,
+    'relid',               relid,
+    'phase',               phase,
+    'heap_blks_total',     heap_blks_total,
+    'heap_blks_scanned',   heap_blks_scanned,
+    'heap_blks_vacuumed',  heap_blks_vacuumed,
+    'index_vacuum_count',  index_vacuum_count,
+    'max_dead_tuples',     max_dead_tuples,
+    'num_dead_tuples',     num_dead_tuples
+  ) ORDER BY pid) AS v
+  FROM pg_stat_progress_vacuum
+),
+\endif
 
 -- ---------------------------------------------------------------------------
 -- Blocking session detail (mirrors v_locks in ultimate_report)
@@ -503,18 +600,39 @@ blocking_sessions AS (
     'wait_event',      wait_event,
     'state',           state,
     'wait_secs',       extract(epoch FROM (now() - query_start))::int,
-    'xact_age_secs',   extract(epoch FROM (now() - xact_start))::int
+    'xact_age_secs',   extract(epoch FROM (now() - xact_start))::int,
+    'query_snippet',   substring(query, 1, 200)
   ) ORDER BY pid) AS v
   FROM pg_stat_activity
   WHERE pg_blocking_pids(pid) <> '{}'
      OR (state = 'idle in transaction'
          AND (now() - xact_start) > interval '5 minutes')
+),
+
+-- ---------------------------------------------------------------------------
+-- pg_stat_statements_info — PG14+: dealloc count + last stats_reset
+-- On PG12-13 this view does not exist; returns NULL sentinel.
+\if :is_pg14
+stat_statements_info AS (
+  SELECT CASE
+    WHEN EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements')
+    THEN (SELECT row_to_json(i) FROM (
+           SELECT dealloc, stats_reset FROM pg_stat_statements_info
+         ) i)
+    ELSE NULL
+  END AS v
 )
+\else
+stat_statements_info AS (
+  SELECT NULL::json AS v
+)
+\endif
 
 -- ---------------------------------------------------------------------------
 SELECT json_build_object(
   '_meta',                    (SELECT v FROM meta),
   'stat_statements',          (SELECT v FROM stat_statements),
+  'stat_statements_info',     (SELECT v FROM stat_statements_info),
   'stat_tables',              (SELECT v FROM stat_tables),
   'statio_tables',            (SELECT v FROM statio_tables),
   'stat_indexes',             (SELECT v FROM stat_indexes),
