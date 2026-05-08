@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  ZK Replay v1.0  (bash)
+#  ZK Replay v1.1  (bash)
 #  Runs pg_audit reports against an offline ZK bundle
 #
 #  Mirrors zk_replay.ps1 — same workflow, same output files.
@@ -16,7 +16,8 @@
 #    --user USER              PostgreSQL user (default: postgres)
 #    --password PASSWORD      PostgreSQL password (or export PGPASSWORD)
 #    --docker-container NAME  Run psql inside this Docker container
-#    --output-dir DIR         Directory for HTML reports (default: bundle dir)
+#    --output-dir DIR         Directory for HTML/JSON reports (default: bundle dir)
+#    --json                   Emit JSON instead of HTML (for LLM ingestion)
 #    -h, --help               Show this help
 #
 #  Examples:
@@ -26,6 +27,10 @@
 #    # Docker container
 #    ./zk_replay.sh --bundle ./zk_audit_20260508_143022 \
 #                   --docker-container pg-test-report --output-dir ./reports
+#
+#    # JSON output for LLM
+#    ./zk_replay.sh --bundle ./zk_audit_20260508_143022 \
+#                   --docker-container pg-test-report --json
 # =============================================================================
 
 set -euo pipefail
@@ -43,6 +48,7 @@ PG_USER="postgres"
 PG_PASSWORD=""
 OUTPUT_DIR=""
 DOCKER_CONTAINER=""
+JSON_MODE=false
 
 # ---------------------------------------------------------------------------
 # Color helpers
@@ -71,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --password)          PG_PASSWORD="$2";      shift 2 ;;
     --output-dir)        OUTPUT_DIR="$2";       shift 2 ;;
     --docker-container)  DOCKER_CONTAINER="$2"; shift 2 ;;
+    --json)              JSON_MODE=true;         shift   ;;
     -h|--help)           usage ;;
     *) _err "Unknown argument: $1" ;;
   esac
@@ -89,12 +96,18 @@ STAT_FILE="${BUNDLE}/stat_snapshot.json"
 [[ -f "$STAT_FILE"    ]] || _err "stat_snapshot.json not found in: $BUNDLE"
 
 INGEST_SQL="${SCRIPT_DIR}/zk_ingest.sql"
-ULTIMATE_SQL="${SCRIPT_DIR}/ultimate_report.sql"
-PERF_SQL="${SCRIPT_DIR}/pg_perf_report.sql"
+
+if $JSON_MODE; then
+  ULTIMATE_SQL="${SCRIPT_DIR}/ultimate_report_json.sql"
+  PERF_SQL="${SCRIPT_DIR}/pg_perf_report_json.sql"
+else
+  ULTIMATE_SQL="${SCRIPT_DIR}/ultimate_report.sql"
+  PERF_SQL="${SCRIPT_DIR}/pg_perf_report.sql"
+fi
 
 [[ -f "$INGEST_SQL"   ]] || _err "zk_ingest.sql not found at: $INGEST_SQL"
-[[ -f "$ULTIMATE_SQL" ]] || _err "ultimate_report.sql not found at: $ULTIMATE_SQL"
-[[ -f "$PERF_SQL"     ]] || _err "pg_perf_report.sql not found at: $PERF_SQL"
+[[ -f "$ULTIMATE_SQL" ]] || _err "$(basename "$ULTIMATE_SQL") not found at: $ULTIMATE_SQL"
+[[ -f "$PERF_SQL"     ]] || _err "$(basename "$PERF_SQL") not found at: $PERF_SQL"
 
 [[ -z "$OUTPUT_DIR" ]] && OUTPUT_DIR="$BUNDLE"
 mkdir -p "$OUTPUT_DIR"
@@ -235,8 +248,13 @@ _run_report() {
 # ---------------------------------------------------------------------------
 # Step 3: Generate reports
 # ---------------------------------------------------------------------------
-ULTIMATE_OUT="${OUTPUT_DIR}/offline_ultimate_report.html"
-PERF_OUT="${OUTPUT_DIR}/offline_perf_report.html"
+if $JSON_MODE; then
+  ULTIMATE_OUT="${OUTPUT_DIR}/offline_ultimate_report.json"
+  PERF_OUT="${OUTPUT_DIR}/offline_perf_report.json"
+else
+  ULTIMATE_OUT="${OUTPUT_DIR}/offline_ultimate_report.html"
+  PERF_OUT="${OUTPUT_DIR}/offline_perf_report.html"
+fi
 
 _run_report "$ULTIMATE_SQL" "$ULTIMATE_OUT" "ultimate_report"
 _run_report "$PERF_SQL"     "$PERF_OUT"     "pg_perf_report"
@@ -258,7 +276,8 @@ fi
 printf "\n"
 printf "  \033[97mReplay complete.\033[0m\n"
 printf "\n"
-for f in "$OUTPUT_DIR"/offline_*.html; do
+EXT="html"; $JSON_MODE && EXT="json"
+for f in "$OUTPUT_DIR"/offline_*."$EXT"; do
   [[ -f "$f" ]] || continue
   NAME="$(basename "$f")"
   SZ="$(_kb "$f")"

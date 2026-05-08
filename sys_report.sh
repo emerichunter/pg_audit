@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  System Health Report Generator v1.0
-#  Reads a sys_collect bundle and produces a self-contained HTML report.
+#  System Health Report Generator v1.1
+#  Reads a sys_collect bundle and produces a self-contained HTML report
+#  or a structured JSON document for LLM consumption.
 #
 #  Usage:
-#    ./sys_report.sh --bundle DIR [--output FILE]
+#    ./sys_report.sh --bundle DIR [--output FILE] [--json]
 #
 #  Options:
 #    --bundle DIR     Path to sys_collect output directory (REQUIRED)
-#    --output FILE    Output HTML file (default: DIR/sys_report.html)
+#    --output FILE    Output file (default: DIR/sys_report.html or sys_report.json)
+#    --json           Emit JSON instead of HTML (for LLM ingestion)
 #    -h, --help       Show this help
 # =============================================================================
 
@@ -16,6 +18,7 @@ set -uo pipefail
 
 BUNDLE=""
 OUTPUT_FILE=""
+JSON_MODE=false
 
 _err()  { printf "  \033[31mERR  %s\033[0m\n" "$*" >&2; exit 1; }
 _step() { printf "  \033[36m%s\033[0m\n" "$*"; }
@@ -25,6 +28,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --bundle)  BUNDLE="$2";      shift 2 ;;
     --output)  OUTPUT_FILE="$2"; shift 2 ;;
+    --json)    JSON_MODE=true;   shift   ;;
     -h|--help) grep '^#  ' "$0" | sed 's/^#  //'; exit 0 ;;
     *) _err "Unknown argument: $1" ;;
   esac
@@ -33,7 +37,10 @@ done
 [[ -z "$BUNDLE" ]] && _err "--bundle is required"
 [[ -d "$BUNDLE" ]] || _err "Bundle directory not found: $BUNDLE"
 BUNDLE="$(cd "$BUNDLE" && pwd)"
-[[ -z "$OUTPUT_FILE" ]] && OUTPUT_FILE="${BUNDLE}/sys_report.html"
+if [[ -z "$OUTPUT_FILE" ]]; then
+  if $JSON_MODE; then OUTPUT_FILE="${BUNDLE}/sys_report.json"
+  else                OUTPUT_FILE="${BUNDLE}/sys_report.html"; fi
+fi
 
 # ---------------------------------------------------------------------------
 # Helper: read a bundle file safely
@@ -176,9 +183,9 @@ IOSTAT_HIGH="$(awk '/Device/{hdr=1;next} hdr && NF>5 {
 NET_ROWS="$(awk '/^\s+[a-z]/ && !/lo:/' "${BUNDLE}/10_net_ifaces.txt" 2>/dev/null | head -20 || echo "")"
 
 NET_ERRORS="$(grep -oE 'errors [0-9]+' "${BUNDLE}/10_net_ifaces.txt" 2>/dev/null \
-  | awk '{s+=$2} END{print s+0}' | tr -d '\n\r' || echo "0")"
+  | awk '{s+=$2} END{print s+0}')"
 NET_DROPS="$(grep -oE 'dropped [0-9]+' "${BUNDLE}/10_net_ifaces.txt" 2>/dev/null \
-  | awk '{s+=$2} END{print s+0}' | tr -d '\n\r' || echo "0")"
+  | awk '{s+=$2} END{print s+0}')"
 NET_ERRORS="${NET_ERRORS:-0}"; NET_ERRORS="${NET_ERRORS//[^0-9]/}"
 NET_DROPS="${NET_DROPS:-0}";   NET_DROPS="${NET_DROPS//[^0-9]/}"
 : "${NET_ERRORS:=0}"; : "${NET_DROPS:=0}"
@@ -296,6 +303,125 @@ while IFS= read -r line; do
 done <<< "$DF_ROWS"
 
 _ok "Findings computed: ${#FINDINGS_HTML[@]} items"
+
+# ---------------------------------------------------------------------------
+# JSON mode — emit structured JSON and exit
+# ---------------------------------------------------------------------------
+if $JSON_MODE; then
+  _step "Generating JSON report..."
+
+  # Build findings array as JSON
+  FINDINGS_JSON="["
+  SEP=""
+  for row in "${FINDINGS_HTML[@]:-}"; do
+    # Extract level and text from badge HTML: <span class="badge b-LEVEL">TEXT</span>  detail
+    LVL="$(echo "$row"  | grep -oP '(?<=b-)[a-z]+(?=")' | head -1)"
+    CAT="$(echo "$row"  | grep -oP '(?<=>)[^<]+(?=</span>)' | head -1)"
+    DET="$(echo "$row"  | sed 's/<[^>]*>//g' | xargs)"
+    # Remove the category from detail string
+    DET="${DET#"$CAT"}"
+    DET="$(echo "$DET" | xargs)"
+    # Escape for JSON
+    CAT_J="$(printf '%s' "$CAT" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    DET_J="$(printf '%s' "$DET" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    FINDINGS_JSON+="${SEP}{\"level\":\"${LVL}\",\"category\":\"${CAT_J}\",\"detail\":\"${DET_J}\"}"
+    SEP=","
+  done
+  FINDINGS_JSON+="]"
+
+  # Disk usage as array
+  DISK_JSON="["
+  SEP=""
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    FS="$(echo "$line"  | awk '{print $1}')"
+    SIZE="$(echo "$line" | awk '{print $2}')"
+    USED="$(echo "$line" | awk '{print $3}')"
+    AVAIL="$(echo "$line"| awk '{print $4}')"
+    PCT="$(echo "$line"  | awk '{print $5}')"
+    MNT="$(echo "$line"  | awk '{print $6}')"
+    FS_J="$(printf '%s' "$FS" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    MNT_J="$(printf '%s' "$MNT" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    DISK_JSON+="${SEP}{\"filesystem\":\"${FS_J}\",\"size\":\"${SIZE}\",\"used\":\"${USED}\",\"avail\":\"${AVAIL}\",\"pct\":\"${PCT}\",\"mount\":\"${MNT_J}\"}"
+    SEP=","
+  done <<< "$DF_ROWS"
+  DISK_JSON+="]"
+
+  # Listening ports as array
+  PORTS_JSON="["
+  SEP=""
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    LINE_J="$(printf '%s' "$line" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    PORTS_JSON+="${SEP}\"${LINE_J}\""
+    SEP=","
+  done <<< "$PORTS_TABLE"
+  PORTS_JSON+="]"
+
+  # Escape helpers for string values — strip control chars, escape for JSON
+  _jstr() { printf '%s' "${1:-}" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+  cat > "$OUTPUT_FILE" <<JSON
+{
+  "report": "system_health",
+  "generated_at": "$(_jstr "$DATE_UTC")",
+  "collected_at": "$(_jstr "$COLL_AT")",
+  "target": "$(_jstr "$TARGET")",
+  "host": {
+    "hostname": "$(_jstr "$HOSTNAME")",
+    "os": "$(_jstr "$OS_PRETTY")",
+    "kernel": "$(_jstr "$KERNEL")",
+    "uptime": "$(_jstr "$UPTIME_RAW")",
+    "virtualization": "$(_jstr "$VIRT")"
+  },
+  "cpu": {
+    "model": "$(_jstr "$CPU_MODEL")",
+    "logical_cpus": "$(_jstr "$CPU_CORES")",
+    "sockets": "$(_jstr "$CPU_PHYS")",
+    "numa_nodes": "$(_jstr "$CPU_NUMA")",
+    "load_1m": "$(_jstr "$LOAD_1")",
+    "load_5m": "$(_jstr "$LOAD_5")",
+    "load_15m": "$(_jstr "$LOAD_15")",
+    "avg_idle_pct": "$(_jstr "$VMSTAT_IDLE")",
+    "avg_iowait_pct": "$(_jstr "$VMSTAT_IOWAIT")"
+  },
+  "memory": {
+    "total_kb": ${MEM_TOTAL_KB:-0},
+    "used_kb": ${MEM_USED_KB:-0},
+    "available_kb": ${MEM_AVAIL_KB:-0},
+    "cached_kb": ${MEM_CACHED_KB:-0},
+    "used_pct": ${MEM_PCT:-0},
+    "swap_total_kb": ${SWAP_TOTAL_KB:-0},
+    "swap_used_kb": ${SWAP_USED_KB:-0},
+    "hugepages_total": "$(_jstr "$HP_TOTAL")",
+    "hugepages_free": "$(_jstr "$HP_FREE")",
+    "thp_status": "$(_jstr "$THP_STATUS")"
+  },
+  "kernel": {
+    "vm_swappiness": "$(_jstr "$SWAPPINESS")",
+    "vm_dirty_ratio": "$(_jstr "$DIRTY_RATIO")",
+    "vm_dirty_background_ratio": "$(_jstr "$DIRTY_BG")",
+    "vm_overcommit_memory": "$(_jstr "$OVERCOMMIT")",
+    "net_core_somaxconn": "$(_jstr "$SOMAXCONN")",
+    "fs_file_max": "$(_jstr "$FILEMAX")",
+    "vm_nr_hugepages": "$(_jstr "$NR_HUGEPAGES")"
+  },
+  "network": {
+    "total_errors": ${NET_ERRORS:-0},
+    "total_drops": ${NET_DROPS:-0},
+    "listening_ports": $PORTS_JSON
+  },
+  "disk": $DISK_JSON,
+  "findings": $FINDINGS_JSON
+}
+JSON
+
+  SZ="$(wc -c < "$OUTPUT_FILE" 2>/dev/null || echo 0)"
+  SZ_KB="$(( (SZ + 512) / 1024 ))"
+  _ok "JSON report: ${SZ_KB} KB → ${OUTPUT_FILE}"
+  printf "\n  \033[97mDone.\033[0m  Open: %s\n\n" "$OUTPUT_FILE"
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # Noatime check on mounts

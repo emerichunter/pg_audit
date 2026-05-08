@@ -19,11 +19,15 @@ Standardized PostgreSQL assessment reports with a premium "Deep Sea" interface, 
    - [What it collects](#what-it-collects-1)
    - [Client quick start](#client-quick-start-no-expert-required)
    - [How to generate](#how-to-generate)
-6. [Version Compatibility Matrix](#version-compatibility-matrix)
-7. [Limitations](#limitations)
-8. [Use Cases](#use-cases)
-9. [Prerequisites](#prerequisites)
-10. [UI Features](#ui-features)
+6. [JSON Export for LLM](#json-export-for-llm)
+   - [Usage](#usage)
+   - [JSON structure](#json-structure)
+   - [Suggested LLM prompt](#suggested-llm-prompt)
+7. [Version Compatibility Matrix](#version-compatibility-matrix)
+8. [Limitations](#limitations)
+9. [Use Cases](#use-cases)
+10. [Prerequisites](#prerequisites)
+11. [UI Features](#ui-features)
 
 ---
 
@@ -32,10 +36,12 @@ Standardized PostgreSQL assessment reports with a premium "Deep Sea" interface, 
 | File | Purpose | Compatibility |
 |------|---------|---------------|
 | `ultimate_report.sql` | Full health and structural audit — infrastructure, schema, security, XID wraparound, bloat, missing indexes, FK gaps | PG 12 – 18 |
+| `ultimate_report_json.sql` | Same audit as above, JSON output for LLM ingestion | PG 12 – 18 |
 | `pg_perf_report.sql` | Query-level performance deep-dive — CPU, I/O, WAL, planning, JIT, cache miss | PG 13 – 18 |
+| `pg_perf_report_json.sql` | Same performance data, JSON output for LLM ingestion | PG 13 – 18 |
 | `ultimate_report_pg19.sql` | Experimental audit for PG 19 features — `pg_stat_lock`, `pg_stat_recovery`, autovacuum parallel | PG 19 (experimental) |
 
-Both primary reports are self-contained HTML: no external CDN, no internet required. All CSS and JavaScript are embedded inline.
+The HTML reports are self-contained: no external CDN, no internet required. All CSS and JavaScript are embedded inline. JSON companions use the same CTEs — no duplication of collection logic.
 
 ---
 
@@ -402,7 +408,165 @@ yum install -y sysstat iproute procps-ng
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--bundle DIR` | **required** | Path to sys_collect output |
-| `--output FILE` | `BUNDLE/sys_report.html` | Output HTML file |
+| `--output FILE` | `BUNDLE/sys_report.html` or `.json` | Output file |
+| `--json` | off | Emit JSON instead of HTML |
+
+---
+
+## JSON Export for LLM
+
+All three report types can output structured JSON instead of HTML. Feed the JSON directly into an LLM (ChatGPT, Claude, Gemini, local models) to generate a plain-language diagnosis, compare environments, or automate triage.
+
+### Architecture
+
+```
+ZK bundle                 Replay container              LLM
+──────────                ─────────────────             ───
+catalog_snapshot.json  ─► offline_ultimate_report.json ─►
+stat_snapshot.json     ─► offline_perf_report.json     ─► diagnosis
+                                                        ─►
+sys_collect bundle     ─► sys_report.json              ─►
+```
+
+### Files
+
+| Report | JSON companion | Output |
+|--------|---------------|--------|
+| Ultimate Audit | `ultimate_report_json.sql` | Same CTEs as HTML, single JSON object |
+| Performance | `pg_perf_report_json.sql` | All pg_stat_statements sections as arrays |
+| System Health | `sys_report.sh --json` | Parsed OS metrics + findings array |
+
+The JSON SQL companions work in both **live** mode (direct psql) and **offline** (ZK shadow schema via `search_path = zk`).
+
+### Usage
+
+**ZK offline replay → JSON:**
+```bash
+# Bash (Linux / WSL)
+./zk_replay.sh --bundle ./my_bundle \
+               --docker-container pg-test-report \
+               --json
+
+# Output
+# zk_json_reports/offline_ultimate_report.json
+# zk_json_reports/offline_perf_report.json
+```
+
+**PowerShell:**
+```powershell
+.\zk_replay.ps1 -Bundle .\my_bundle `
+                -DockerContainer pg-test-report `
+                -Json
+```
+
+**Live generation (direct psql):**
+```bash
+# Ultimate audit JSON
+psql -h db -U postgres -d mydb -A -t -q \
+     -f ultimate_report_json.sql -o audit.json
+
+# Performance JSON
+psql -h db -U postgres -d mydb -A -t -q \
+     -f pg_perf_report_json.sql -o perf.json
+```
+
+**System health JSON:**
+```bash
+# Collect first (if needed)
+./sys_collect.sh --output-dir ./sys_bundle
+
+# Generate JSON
+./sys_report.sh --bundle ./sys_bundle --json
+# → sys_bundle/sys_report.json
+```
+
+### JSON structure
+
+**Ultimate Audit (`offline_ultimate_report.json`):**
+```json
+{
+  "report": "ultimate_audit",
+  "pg_version": "17.4",
+  "generated_at": "2026-05-08T20:18:51Z",
+  "buffer_hit_ratio_pct": 99.7,
+  "extensions": [...],
+  "databases": [...],
+  "archiving": {"status": "OK", "archived_count": 0, ...},
+  "replication": {"status": "PRIMARY_NO_REPLICAS", ...},
+  "replication_slots": [],
+  "bloat": [{"schemaname":"public","tablename":"events","tbloat":3.1,"wasted":"942 MB"}],
+  "duplicate_indexes": [],
+  "inefficient_indexes": [],
+  "missing_indexes": [...],
+  "unindexed_fk": [...],
+  "wraparound_risk": [],
+  "blocking_locks": [],
+  "roles_security": [...],
+  "sequences_at_risk": [],
+  "critical_settings": [{"name":"fsync","setting":"on","risk":"OK"}, ...]
+}
+```
+
+**Performance (`offline_perf_report.json`):**
+```json
+{
+  "report": "performance",
+  "pg_version": "17.4",
+  "top_cpu": [{"query":"...", "calls":1200, "cpu_time_ms":191776, "pct_cpu":100.0}],
+  "top_io": [...],
+  "top_planning": [...],
+  "top_wal": [...],
+  "top_freq": [...],
+  "top_heavy": [...],
+  "top_jitter": [...],
+  "top_temp_files": [...],
+  "top_cache_miss": [...],
+  "stats_meta": {"dealloc":0, "stats_reset":"..."}
+}
+```
+
+**System Health (`sys_report.json`):**
+```json
+{
+  "report": "system_health",
+  "host": {"hostname":"db01","os":"Ubuntu 22.04","kernel":"6.8.0"},
+  "cpu": {"model":"Intel Xeon E5-2680","logical_cpus":"16","load_1m":"2.1","avg_iowait_pct":"18"},
+  "memory": {"total_kb":32768000,"used_kb":28000000,"used_pct":85},
+  "kernel": {"vm_swappiness":"60","vm_dirty_ratio":"20"},
+  "network": {"total_errors":0,"total_drops":0},
+  "disk": [{"filesystem":"/dev/sda1","pct":"87%","mount":"/"}],
+  "findings": [
+    {"level":"orange","category":"IOWAIT WARN","detail":"avg iowait 18% — watch disk latency"},
+    {"level":"orange","category":"MEM WARN","detail":"26.7 GB used / 31.2 GB total (85%)"}
+  ]
+}
+```
+
+### Suggested LLM prompt
+
+```
+You are a senior PostgreSQL and Linux performance engineer.
+I'm providing you with three JSON reports from a production server audit:
+1. PostgreSQL Ultimate Audit (schema, security, bloat, replication)
+2. PostgreSQL Performance Report (top queries by CPU, I/O, WAL)
+3. System Health Report (CPU, RAM, disk, network, kernel tuning)
+
+Analyze all three. Identify the top 5 issues by risk/impact.
+For each issue: explain what it means in plain language, the risk if not fixed,
+and give a concrete remediation command or config change.
+Format the output as a prioritized action plan.
+
+--- ULTIMATE AUDIT ---
+<paste offline_ultimate_report.json>
+
+--- PERFORMANCE REPORT ---
+<paste offline_perf_report.json>
+
+--- SYSTEM HEALTH ---
+<paste sys_report.json>
+```
+
+> **Tip:** For large perf reports (500+ KB), use a model with a large context window (Claude 3.5 Sonnet, GPT-4o, Gemini 1.5 Pro) or summarize the top 3 entries per section before pasting.
 
 ---
 
