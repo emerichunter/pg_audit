@@ -1,18 +1,18 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  ZK Audit Collector — Zero Knowledge PostgreSQL snapshot bundle
+  ZK Audit Collector - Zero Knowledge PostgreSQL snapshot bundle
 
 .DESCRIPTION
   Collects a complete schema + statistics snapshot from a PostgreSQL instance
   without extracting any user data.
 
   Outputs a timestamped directory containing:
-    catalog_snapshot.json   — schema, indexes, roles, settings (zk_catalog_dump.sql)
-    stat_snapshot.json      — query stats, table stats, bloat, locks (zk_stat_dump.sql)
-    schema_dump.sql         — DDL structure (pg_dump --schema-only)
-    statistics_dump.sql     — planner statistics (pg_dump --statistics-only, PG17+)
-    manifest.json           — collection metadata + file inventory
+    catalog_snapshot.json   - schema, indexes, roles, settings (zk_catalog_dump.sql)
+    stat_snapshot.json      - query stats, table stats, bloat, locks (zk_stat_dump.sql)
+    schema_dump.sql         - DDL structure (pg_dump --schema-only)
+    statistics_dump.sql     - planner statistics (pg_dump --statistics-only, PG18+)
+    manifest.json           - collection metadata + file inventory
 
 .PARAMETER Host
   PostgreSQL server hostname (default: localhost)
@@ -181,15 +181,40 @@ try {
 }
 
 # ---------------------------------------------------------------------------
+# Detect PostgreSQL major version (needed for pg_dump option selection)
+# ---------------------------------------------------------------------------
+
+$pgVerNum = 0
+try {
+    if ($DockerContainer) {
+        $pgVerNum = [int](docker exec $DockerContainer psql -U $User -d $Database -A -t -q `
+            -c "SELECT current_setting('server_version_num')::int;" 2>$null)
+    } else {
+        $pgVerNum = [int](& psql -h $PgHost -p $Port -U $User -d $Database -A -t -q `
+            -c "SELECT current_setting('server_version_num')::int;" 2>$null)
+    }
+} catch { $pgVerNum = 0 }
+
+$pgMajor = [math]::Floor($pgVerNum / 10000)
+Write-Host "  Detected PostgreSQL major version: $pgMajor" -ForegroundColor DarkGray
+
+# ---------------------------------------------------------------------------
 # Step 3: pg_dump --schema-only
+# NOTE: --schema-only excludes sequence current values.
+#       Sequence data is captured via zk_catalog_dump.sql (pg_sequences view).
+#       For PG17+, --no-statistics keeps schema dump lean (stats go in step 4).
 # ---------------------------------------------------------------------------
 
 if (-not $NoSchemaDump) {
     Write-Step "Running pg_dump --schema-only..."
     $schemaOut = Join-Path $OutputDir "schema_dump.sql"
 
+    $schemaArgs = @("--schema-only", "--no-password")
+    # PG18+ supports --no-statistics to keep schema dump lean (stats go in statistics_dump.sql)
+    if ($pgMajor -ge 18) { $schemaArgs += "--no-statistics" }
+
     try {
-        Invoke-PgDump -ExtraArgs @("--schema-only", "--no-password") -OutFile $schemaOut
+        Invoke-PgDump -ExtraArgs $schemaArgs -OutFile $schemaOut
         $size = (Get-Item $schemaOut).Length
         Write-Ok "schema_dump.sql  ($([math]::Round($size/1KB, 1)) KB)"
     } catch {
@@ -198,20 +223,37 @@ if (-not $NoSchemaDump) {
 }
 
 # ---------------------------------------------------------------------------
-# Step 4: pg_dump --statistics-only  (PostgreSQL 17+)
+# Step 4: pg_dump --statistics-only  (PostgreSQL 18+ only)
+# PG17 and earlier: planner statistics are captured via pg_stats in
+#   catalog_snapshot.json (planner_stats section). No pg_dump equivalent.
+# PG18+: --statistics-only dumps ANALYZE statistics objects separately.
+# Note on --sequence-data: excluded by design - sequence current values are
+#   captured via pg_sequences in catalog_snapshot.json instead.
 # ---------------------------------------------------------------------------
 
 if (-not $NoStatDump) {
-    Write-Step "Running pg_dump --statistics-only (PG17+)..."
     $statsOut = Join-Path $OutputDir "statistics_dump.sql"
 
-    try {
-        Invoke-PgDump -ExtraArgs @("--statistics-only", "--no-password") -OutFile $statsOut
-        $size = (Get-Item $statsOut).Length
-        Write-Ok "statistics_dump.sql  ($([math]::Round($size/1KB, 1)) KB)"
-    } catch {
-        Write-Warn "statistics_dump.sql failed (may not be PG17+): $_"
-        "-- pg_dump --statistics-only not available on this PostgreSQL version" | Out-File $statsOut
+    if ($pgMajor -ge 18) {
+        Write-Step "Running pg_dump --statistics-only (PG18+)..."
+        try {
+            Invoke-PgDump -ExtraArgs @("--statistics-only", "--no-password") -OutFile $statsOut
+            $size = (Get-Item $statsOut).Length
+            Write-Ok "statistics_dump.sql  ($([math]::Round($size/1KB, 1)) KB)"
+        } catch {
+            Write-Warn "statistics_dump.sql failed: $_"
+            "-- pg_dump --statistics-only failed" | Out-File $statsOut -Encoding utf8
+        }
+    } else {
+        Write-Step "Skipping pg_dump --statistics-only (PG$pgMajor - requires PG18+)..."
+        Write-Host "    Planner stats captured via pg_stats in catalog_snapshot.json" -ForegroundColor DarkGray
+        $noteLines = @(
+            "-- pg_dump --statistics-only requires PostgreSQL 18+.",
+            "-- Planner statistics are available in catalog_snapshot.json (planner_stats section).",
+            "-- PostgreSQL major version detected: $pgMajor"
+        )
+        $noteLines | Out-File $statsOut -Encoding utf8
+        Write-Ok "statistics_dump.sql  (note written)"
     }
 }
 

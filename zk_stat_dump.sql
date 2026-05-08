@@ -430,23 +430,106 @@ missing_index_candidates AS (
   WHERE seq_scan > 100
     AND n_live_tup > 10000
     AND (idx_scan IS NULL OR seq_scan > idx_scan)
+),
+
+-- ---------------------------------------------------------------------------
+-- WAL archiver status (mirrored from v_archiver in ultimate_report)
+stat_archiver AS (
+  SELECT CASE
+    WHEN has_table_privilege('pg_stat_archiver', 'select')
+    THEN (
+      SELECT row_to_json(a) FROM (
+        SELECT
+          archived_count,
+          last_archived_wal,
+          last_archived_time,
+          failed_count,
+          last_failed_wal,
+          last_failed_time,
+          stats_reset,
+          CASE
+            WHEN archived_count IS NULL THEN 'ARCHIVING_DISABLED'
+            WHEN failed_count > 0       THEN 'FAILURES'
+            ELSE 'OK'
+          END AS status
+        FROM pg_stat_archiver
+      ) a
+    )
+    ELSE json_build_object('status', 'PERMISSION_DENIED')
+  END AS v
+),
+
+-- ---------------------------------------------------------------------------
+-- User function execution stats
+stat_user_functions AS (
+  SELECT json_agg(json_build_object(
+    'schema',      schemaname,
+    'funcname',    funcname,
+    'calls',       calls,
+    'total_time',  round(total_time::numeric, 2),
+    'self_time',   round(self_time::numeric, 2),
+    'mean_time',   CASE WHEN calls > 0 THEN round(total_time::numeric / calls, 2) END
+  ) ORDER BY total_time DESC NULLS LAST) AS v
+  FROM pg_stat_user_functions
+),
+
+-- ---------------------------------------------------------------------------
+-- Active vacuum / analyze progress (in-flight operations)
+stat_progress_vacuum AS (
+  SELECT json_agg(json_build_object(
+    'pid',                 pid,
+    'datname',             datname,
+    'relid',               relid,
+    'phase',               phase,
+    'heap_blks_total',     heap_blks_total,
+    'heap_blks_scanned',   heap_blks_scanned,
+    'heap_blks_vacuumed',  heap_blks_vacuumed,
+    'index_vacuum_count',  index_vacuum_count,
+    'indexes_total',       indexes_total,
+    'indexes_processed',   indexes_processed
+  ) ORDER BY pid) AS v
+  FROM pg_stat_progress_vacuum
+),
+
+-- ---------------------------------------------------------------------------
+-- Blocking session detail (mirrors v_locks in ultimate_report)
+blocking_sessions AS (
+  SELECT json_agg(json_build_object(
+    'pid',             pid,
+    'usename',         usename,
+    'backend_type',    backend_type,
+    'blockers',        pg_blocking_pids(pid)::text,
+    'wait_event_type', wait_event_type,
+    'wait_event',      wait_event,
+    'state',           state,
+    'wait_secs',       extract(epoch FROM (now() - query_start))::int,
+    'xact_age_secs',   extract(epoch FROM (now() - xact_start))::int
+  ) ORDER BY pid) AS v
+  FROM pg_stat_activity
+  WHERE pg_blocking_pids(pid) <> '{}'
+     OR (state = 'idle in transaction'
+         AND (now() - xact_start) > interval '5 minutes')
 )
 
 -- ---------------------------------------------------------------------------
 SELECT json_build_object(
-  '_meta',                   (SELECT v FROM meta),
-  'stat_statements',         (SELECT v FROM stat_statements),
-  'stat_tables',             (SELECT v FROM stat_tables),
-  'statio_tables',           (SELECT v FROM statio_tables),
-  'stat_indexes',            (SELECT v FROM stat_indexes),
-  'stat_bgwriter',           (SELECT v FROM stat_bgwriter),
-  'stat_database',           (SELECT v FROM stat_database),
-  'stat_replication',        (SELECT v FROM stat_replication),
-  'replication_slots',       (SELECT v FROM replication_slots),
-  'activity_summary',        (SELECT v FROM activity_summary),
-  'locks_summary',           (SELECT v FROM locks_summary),
-  'bloat_estimate',          (SELECT v FROM bloat_estimate),
-  'dup_indexes',             (SELECT v FROM dup_indexes),
-  'unused_indexes',          (SELECT v FROM unused_indexes),
-  'missing_index_candidates',(SELECT v FROM missing_index_candidates)
+  '_meta',                    (SELECT v FROM meta),
+  'stat_statements',          (SELECT v FROM stat_statements),
+  'stat_tables',              (SELECT v FROM stat_tables),
+  'statio_tables',            (SELECT v FROM statio_tables),
+  'stat_indexes',             (SELECT v FROM stat_indexes),
+  'stat_bgwriter',            (SELECT v FROM stat_bgwriter),
+  'stat_database',            (SELECT v FROM stat_database),
+  'stat_replication',         (SELECT v FROM stat_replication),
+  'replication_slots',        (SELECT v FROM replication_slots),
+  'activity_summary',         (SELECT v FROM activity_summary),
+  'locks_summary',            (SELECT v FROM locks_summary),
+  'blocking_sessions',        (SELECT v FROM blocking_sessions),
+  'bloat_estimate',           (SELECT v FROM bloat_estimate),
+  'dup_indexes',              (SELECT v FROM dup_indexes),
+  'unused_indexes',           (SELECT v FROM unused_indexes),
+  'missing_index_candidates', (SELECT v FROM missing_index_candidates),
+  'stat_archiver',            (SELECT v FROM stat_archiver),
+  'stat_user_functions',      (SELECT v FROM stat_user_functions),
+  'stat_progress_vacuum',     (SELECT v FROM stat_progress_vacuum)
 );
