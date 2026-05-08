@@ -140,29 +140,51 @@ zk_collect.ps1   ──bundle──►  zk_replay.ps1
 
 ### How to collect
 
-**Local PostgreSQL:**
+Both `zk_collect.ps1` (PowerShell, Windows) and `zk_collect.sh` (bash, Linux/macOS/WSL) are provided. They are feature-identical and produce the same bundle format.
+
+**Local PostgreSQL (PowerShell):**
 ```powershell
 .\zk_collect.ps1 -PgHost localhost -Port 5432 -Database mydb -User postgres
 ```
 
+**Local PostgreSQL (bash):**
+```bash
+./zk_collect.sh --host localhost --port 5432 --database mydb --user postgres
+```
+
 **With password / custom output:**
 ```powershell
+# PowerShell
 .\zk_collect.ps1 -PgHost db.example.com -User readonly `
                  -Password secret -OutputDir ./audit_bundle
+```
+```bash
+# bash
+./zk_collect.sh --host db.example.com --user readonly \
+                --password secret --output-dir ./audit_bundle
 ```
 
 **Docker container:**
 ```powershell
+# PowerShell
 .\zk_collect.ps1 -DockerContainer my-postgres-container `
                  -Database mydb -User postgres
+```
+```bash
+# bash
+./zk_collect.sh --docker-container my-postgres-container \
+                --database mydb --user postgres
 ```
 
 **Skip DDL dump (stats only):**
 ```powershell
 .\zk_collect.ps1 -DockerContainer my-pg -NoSchemaDump
 ```
+```bash
+./zk_collect.sh --docker-container my-pg --no-schema-dump
+```
 
-The output directory is auto-named `zk_audit_YYYYMMDD_HHMMSS` if `-OutputDir` is not set.
+The output directory is auto-named `zk_audit_YYYYMMDD_HHMMSS` if not set.
 
 ### Bundle contents
 
@@ -185,16 +207,30 @@ Once you have a bundle, run the two audit reports against a local PostgreSQL ins
 
 ### How to replay
 
-**Against a local PostgreSQL:**
+Both `zk_replay.ps1` (PowerShell, Windows) and `zk_replay.sh` (bash, Linux/macOS/WSL) are provided.
+
+**Against a local PostgreSQL (PowerShell):**
 ```powershell
 .\zk_replay.ps1 -Bundle .\zk_audit_20260508_143022
 ```
 
-**Against a Docker container (e.g. the pg-test-report container):**
+**Against a local PostgreSQL (bash):**
+```bash
+./zk_replay.sh --bundle ./zk_audit_20260508_143022
+```
+
+**Against a Docker container:**
 ```powershell
+# PowerShell
 .\zk_replay.ps1 -Bundle .\zk_audit_20260508_143022 `
                 -DockerContainer pg-test-report `
                 -OutputDir .\reports
+```
+```bash
+# bash
+./zk_replay.sh --bundle ./zk_audit_20260508_143022 \
+               --docker-container pg-test-report \
+               --output-dir ./reports
 ```
 
 **Full parameter set:**
@@ -302,9 +338,14 @@ You deliver:  offline_ultimate_report.html + offline_perf_report.html
 Run `zk_collect.ps1` as a scheduled task or CI step, commit bundles to Git (they are tiny), and replay on any runner to generate and archive reports.
 
 ```powershell
-# In a CI pipeline or Windows Task Scheduler:
+# Windows / PowerShell CI:
 .\zk_collect.ps1 -DockerContainer prod-pg -OutputDir ./audit_$(Get-Date -Format yyyyMMdd)
 .\zk_replay.ps1  -Bundle ./audit_$(Get-Date -Format yyyyMMdd) -OutputDir ./reports
+```
+```bash
+# Linux / macOS / WSL CI:
+./zk_collect.sh --docker-container prod-pg --output-dir ./audit_$(date +%Y%m%d)
+./zk_replay.sh  --bundle ./audit_$(date +%Y%m%d) --output-dir ./reports
 ```
 
 ### Air-gapped or restricted environments
@@ -329,19 +370,33 @@ psql -h prod-db -U readonly -d mydb -A -t -q -f ultimate_report.sql -o audit.htm
 - Role with at minimum `pg_read_all_stats` or `pg_monitor`
 - `pg_stat_statements` extension enabled for query-level metrics (optional but recommended)
 
-### For ZK collection (`zk_collect.ps1`)
-- PowerShell 5.1+ (Windows) — ships with Windows 10/11
+### For ZK collection
+
+**`zk_collect.ps1` (Windows / PowerShell):**
+- PowerShell 5.1+ — ships with Windows 10/11
 - `psql` and `pg_dump` in `PATH` (or Docker container if using `-DockerContainer`)
 - Docker CLI in `PATH` if using `-DockerContainer`
 - Read-only PostgreSQL role (write access not required)
 
-### For ZK replay (`zk_replay.ps1`)
-- PowerShell 5.1+ (Windows)
+**`zk_collect.sh` (Linux / macOS / WSL):**
+- bash 4+
+- `psql` and `pg_dump` in `PATH` — install via `apt install postgresql-client` or `brew install libpq`
+- Docker CLI in `PATH` if using `--docker-container`
+- Read-only PostgreSQL role (write access not required)
+
+### For ZK replay
+
+**`zk_replay.ps1` (Windows / PowerShell):**
+- PowerShell 5.1+
 - A local PostgreSQL instance accessible via `psql` **or** a Docker container
   - The replay target can be any PG version (12–18)
-  - Any database works; the replay creates `_zk_catalog` and `_zk_stat` staging tables and a `zk` schema in the target database (dropped on next run)
 - The replay target user needs: `CREATE SCHEMA`, `CREATE TABLE`, `CREATE FUNCTION` privileges
 - Typically superuser or a dedicated `audit_replay` role is appropriate
+
+**`zk_replay.sh` (Linux / macOS / WSL):**
+- bash 4+
+- `psql` in `PATH` (`postgresql-client` package) **or** a Docker container for replay
+- Same privilege requirements as the PowerShell variant
 
 ### Tested environments
 
