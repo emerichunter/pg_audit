@@ -1,6 +1,6 @@
 # PostgreSQL Audit & Performance Reports
 
-Standardized PostgreSQL assessment reports with a premium "Deep Sea" interface, plus a **Zero Knowledge (ZK) collection system** for offline audit delivery. Supports live generation against any PostgreSQL instance as well as fully offline replay from a JSON snapshot bundle — no second connection to the target server required.
+Standardized PostgreSQL assessment reports with a premium "Deep Sea" interface, a **Zero Knowledge (ZK) collection system** for offline audit delivery, and a **System Health collector** for OS-level diagnostics. Supports live generation, offline replay from JSON bundles, and standalone system snapshots — no persistent access to the target required.
 
 ---
 
@@ -15,11 +15,15 @@ Standardized PostgreSQL assessment reports with a premium "Deep Sea" interface, 
 4. [Offline Replay](#offline-replay)
    - [How to replay](#how-to-replay)
    - [How it works](#how-it-works)
-5. [Version Compatibility Matrix](#version-compatibility-matrix)
-6. [Limitations](#limitations)
-7. [Use Cases](#use-cases)
-8. [Prerequisites](#prerequisites)
-9. [UI Features](#ui-features)
+5. [System Health Report](#system-health-report)
+   - [What it collects](#what-it-collects-1)
+   - [Client quick start](#client-quick-start-no-expert-required)
+   - [How to generate](#how-to-generate)
+6. [Version Compatibility Matrix](#version-compatibility-matrix)
+7. [Limitations](#limitations)
+8. [Use Cases](#use-cases)
+9. [Prerequisites](#prerequisites)
+10. [UI Features](#ui-features)
 
 ---
 
@@ -266,6 +270,139 @@ The replay orchestrator (`zk_replay.ps1`) performs four steps:
 3. **Run reports** — Executes `ultimate_report.sql` and `pg_perf_report.sql` with `search_path = zk, pg_catalog, public`. With this search path, all unqualified catalog references (`pg_stat_statements`, `pg_database`, etc.) resolve to the shadow `zk` schema transparently. The reports require no modification.
 
 4. **Output HTML** — Each report is run with psql `-o` to capture the full HTML output.
+
+---
+
+## System Health Report
+
+A separate OS-level assessment that runs independently of PostgreSQL. Collects raw system metrics and generates a self-contained HTML report with color-coded findings and recommendations.
+
+```
+Server / VM / Container
+────────────────────────
+sys_collect.sh   ──bundle──►  sys_report.sh
+(collect once)                (generate anytime)
+                               ↓
+                         sys_report.html
+```
+
+### What it collects
+
+| Section | Tools used | Fallback |
+|---------|-----------|---------|
+| CPU info & topology | `lscpu`, `nproc` | `/proc/cpuinfo` |
+| CPU usage & I/O wait | `vmstat 1 5`, `mpstat` | `/proc/stat` |
+| Load average | `/proc/loadavg` | `uptime` |
+| Memory detail | `/proc/meminfo`, `free -m`, `vmstat -s` | always available |
+| Huge pages & THP | `/proc/meminfo`, sysctl, `/sys/kernel/mm/transparent_hugepage` | graceful skip |
+| Disk usage | `df -h`, `lsblk` | always available |
+| I/O statistics | `iostat -x 1 5` (sysstat) | `/proc/diskstats` snapshots |
+| Mount options | `findmnt`, `/etc/fstab` | `/proc/mounts` |
+| Kernel parameters | `sysctl` — vm.\*, net.\*, kernel.shm\*, fs.file-max | `/proc/sys/*` |
+| Network interfaces | `ip -s link`, `/proc/net/dev` | `ifconfig` |
+| Network throughput | `sar -n DEV 1 5` (sysstat) | `/proc/net/dev` snapshots |
+| Sockets & ports | `ss -s`, `ss -tuln` | `netstat` |
+| Top processes | `ps aux` by CPU and memory | always available |
+| Running services | `systemctl list-units` | `ps aux` |
+| Docker containers | `docker ps`, `docker stats` | graceful skip |
+| Kernel events | `dmesg --level=err,warn` | graceful skip (root needed) |
+| Security posture | SELinux/AppArmor, iptables/nft, ASLR | partial |
+
+**Findings automatically checked:**
+- Load average vs CPU count (saturated / warning / OK)
+- I/O wait % (bottleneck / warning / OK)
+- Memory usage % (critical / warning / OK)
+- Swap activity (active / no swap configured)
+- `vm.swappiness` (PostgreSQL recommends 1–10; warns if > 10)
+- Transparent Huge Pages (warns if `always`; recommends `never` or `madvise`)
+- Huge pages not configured (TLB pressure info)
+- `vm.dirty_ratio` too high (warns if > 40)
+- `vm.overcommit_memory=1` (OOM kill risk)
+- `net.core.somaxconn` too low (< 4096)
+- Network errors / drops > 0
+- Disk usage ≥ 80% (warning), ≥ 90% (critical)
+
+---
+
+### Client Quick Start (no expert required)
+
+> **Send these two files to your client and ask them to run the following commands. No PostgreSQL access, no root strictly required (some sections need sudo for sysctl/dmesg).**
+
+```bash
+# 1. Copy the scripts to the target server
+scp sys_collect.sh sys_report.sh user@server:~
+
+# 2. SSH into the server and run the collector
+ssh user@server
+bash sys_collect.sh              # collects everything, auto-names output dir
+
+# 3. (Optional) Generate the HTML report locally too
+bash sys_report.sh --bundle sys_HOSTNAME_YYYYMMDD_HHMMSS
+
+# 4. Compress and send the bundle
+zip -r sys_bundle.zip sys_HOSTNAME_YYYYMMDD_HHMMSS/
+```
+
+The bundle is typically **50–200 KB**. The consultant runs `sys_report.sh --bundle` on their own machine to generate the HTML report without needing any further server access.
+
+**Permissions needed:**
+- Regular user: CPU, memory, disk, network, processes, ports (most sections)
+- Root / sudo: `sysctl` full dump, `dmesg` kernel events, `iptables`
+
+**Tools needed on the target server (all optional — script degrades gracefully):**
+```bash
+# Debian / Ubuntu
+apt-get install -y sysstat iproute2 procps
+
+# RHEL / CentOS
+yum install -y sysstat iproute procps-ng
+```
+
+---
+
+### How to generate
+
+**Collect on the local machine:**
+```bash
+./sys_collect.sh
+./sys_report.sh --bundle sys_HOSTNAME_YYYYMMDD_HHMMSS
+```
+
+**Collect inside a Docker container:**
+```bash
+./sys_collect.sh --docker-container my-postgres-container
+./sys_report.sh  --bundle sys_HOSTNAME_YYYYMMDD_HHMMSS
+```
+
+**Collect from a remote server via SSH:**
+```bash
+./sys_collect.sh --ssh db.example.com --ssh-user root
+./sys_report.sh  --bundle sys_db_YYYYMMDD_HHMMSS
+```
+
+**Custom output path:**
+```bash
+./sys_collect.sh --output-dir /tmp/my_bundle
+./sys_report.sh  --bundle /tmp/my_bundle --output /tmp/my_bundle/report.html
+```
+
+**Full parameter reference:**
+
+`sys_collect.sh`:
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--output-dir DIR` | `sys_HOST_YYYYMMDD_HHMMSS` | Output directory |
+| `--docker-container NAME` | — | Collect inside Docker container |
+| `--ssh HOST` | — | Collect via SSH |
+| `--ssh-user USER` | `root` | SSH username |
+| `--ssh-port PORT` | `22` | SSH port |
+| `--ssh-key FILE` | — | SSH private key |
+
+`sys_report.sh`:
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--bundle DIR` | **required** | Path to sys_collect output |
+| `--output FILE` | `BUNDLE/sys_report.html` | Output HTML file |
 
 ---
 
