@@ -1,84 +1,369 @@
-# 📊 PostgreSQL Modern Assessment Reports
+# PostgreSQL Audit & Performance Reports
 
-Standardized and modernized PostgreSQL assessment reports featuring a premium "Deep Sea" interface. These reports are designed to provide a professional, data-first experience for database administrators and consultants, supporting both **English** and **French** languages.
-
----
-
-## ✨ Key Features
-
-- **🌓 Dual-Theme System**: Premium "Deep Sea" dark mode by default, with a "Legacy White" mode for accessibility and printing.
-- **🌍 Bilingual Support (EN/FR)**: Instant client-side translation of all UI elements, card headers, and technical labels.
-- **🛡️ Robust & Permission-Safe**: Enhanced SQL logic that detects user privileges (e.g., `pg_read_all_stats`) to prevent script crashes on restricted environments (Managed RDS/Azure/GCP).
-- **🚀 Interactive UX**: 
-  - **Query Expansion**: Click any truncated SQL query or use the **Global Toggle (SHORT / LONG)** to expand all queries at once.
-  - **Sticky Headers**: Keep track of columns even in very long tables.
-  - **Back-to-Top**: Smooth scrolling navigation for deep-dive reports.
-  - **Copy-to-Clipboard**: Quickly copy query snippets directly from the report rows.
-- **🎨 Visual Risk Indicators**: Color-coded badges (Red for critical, Orange for warnings, Blue for info) to highlight audit findings immediately.
+Standardized PostgreSQL assessment reports with a premium "Deep Sea" interface, plus a **Zero Knowledge (ZK) collection system** for offline audit delivery. Supports live generation against any PostgreSQL instance as well as fully offline replay from a JSON snapshot bundle — no second connection to the target server required.
 
 ---
 
-## 📄 Report Overview
+## Table of Contents
 
-### 1. `pg_perf_report.sql`
-A comprehensive performance dashboard optimized for modern PostgreSQL versions.
-- **Dynamic Monitoring**: Automatically detects the server version and adjusts labels.
-- **Metrics**: Top CPU consumers, Disk I/O latency, WAL generation, Planning time, Jitter, and JIT overhead.
-- **Goal**: Identify query-level bottlenecks with precision.
-
-### 2. `ultimate_report.sql`
-The primary health and structural audit engine, consolidating features from legacy DBA toolkits into a single, high-fidelity report.
-- **Compatibility**: Verified for PostgreSQL 12, 13, 14, 15, 16, 17, and **18**.
-- **Features**: Infrastructure tracking, maintenance metrics, real-time activity, and schema optimization.
-
-### 3. `ultimate_report_pg19.sql` (Experimental)
-A specialized version designed specifically for **PostgreSQL 19** enhancements.
-- **Advanced Observability**: Leverages `pg_stat_lock`, `pg_stat_recovery`, and `pg_stat_autovacuum_parallel`.
-- **Integrity Tracking**: Monitors data checksum status and online REPACK progress natively.
+1. [Report Overview](#report-overview)
+2. [Live Generation — Direct psql](#live-generation--direct-psql)
+3. [Zero Knowledge (ZK) Collection System](#zero-knowledge-zk-collection-system)
+   - [What it collects](#what-it-collects)
+   - [How to collect](#how-to-collect)
+   - [Bundle contents](#bundle-contents)
+4. [Offline Replay](#offline-replay)
+   - [How to replay](#how-to-replay)
+   - [How it works](#how-it-works)
+5. [Version Compatibility Matrix](#version-compatibility-matrix)
+6. [Limitations](#limitations)
+7. [Use Cases](#use-cases)
+8. [Prerequisites](#prerequisites)
+9. [UI Features](#ui-features)
 
 ---
 
-## 🚀 Generation Instructions
+## Report Overview
 
-To generate a professional HTML report without SQL metadata or extraneous characters, use the following `psql` command structure:
+| File | Purpose | Compatibility |
+|------|---------|---------------|
+| `ultimate_report.sql` | Full health and structural audit — infrastructure, schema, security, XID wraparound, bloat, missing indexes, FK gaps | PG 12 – 18 |
+| `pg_perf_report.sql` | Query-level performance deep-dive — CPU, I/O, WAL, planning, JIT, cache miss | PG 13 – 18 |
+| `ultimate_report_pg19.sql` | Experimental audit for PG 19 features — `pg_stat_lock`, `pg_stat_recovery`, autovacuum parallel | PG 19 (experimental) |
 
-### Required `psql` Options:
-- **`-A` (or `--no-align`)**: Switches to unaligned output mode. This is crucial for avoiding whitespace padding in the HTML tags.
-- **`-t` (or `--tuples-only`)**: Removes column headers and footers from the output. This ensures the output is a clean HTML stream.
-- **`-q` (or `--quiet`)**: Prevents `psql` from printing status messages.
-- **`-f`**: Specifies the input SQL script.
-- **`-o`**: Specifies the output HTML file path.
+Both primary reports are self-contained HTML: no external CDN, no internet required. All CSS and JavaScript are embedded inline.
 
-### Example Commands:
+---
+
+## Live Generation — Direct psql
 
 ```bash
-# Performance Report (Modern PG)
-psql -A -t -q -d [db] -f pg_perf_report.sql -o perf_report.html
+# Full audit (PG12-18)
+psql -A -t -q -d mydb -f ultimate_report.sql -o audit.html
 
-# Ultimate Health Audit (PG12-18)
-psql -A -t -q -d [db] -f ultimate_report.sql -o audit_report.html
+# Performance deep-dive (PG13-18)
+psql -A -t -q -d mydb -f pg_perf_report.sql -o perf.html
 
-# Experimental Audit (PG19+)
-psql -A -t -q -d [db] -f ultimate_report_pg19.sql -o audit_pg19.html
+# PG19 experimental
+psql -A -t -q -d mydb -f ultimate_report_pg19.sql -o audit_pg19.html
+```
+
+The scripts use internal `\pset` directives (`format html`, `tuples_only on`, `footer off`) so all four flags (`-A -t -q`) are necessary to strip psql metadata wrappers from the output.
+
+### With connection flags
+
+```bash
+psql -h db.internal -p 5432 -U readonly -d mydb \
+     -A -t -q -f ultimate_report.sql -o audit.html
+```
+
+### Minimum required privileges
+
+| Feature | Minimum role |
+|---------|-------------|
+| Core metrics | `pg_read_all_stats` (PG10+) or `pg_monitor` |
+| WAL / archiver details | `pg_read_all_stats` |
+| `pg_stat_statements` | Extension must be loaded; no extra role needed |
+| Security section (`pg_roles`) | Superuser or `pg_read_all_settings` |
+
+Sections that lack permission return "N/A" or "No data" instead of failing the entire script.
+
+---
+
+## Zero Knowledge (ZK) Collection System
+
+The ZK system lets you audit a PostgreSQL instance **without extracting user data**. It captures schema structure, catalog metadata, and statistical counters — nothing from actual application tables — then bundles the result into a portable JSON snapshot.
+
+The bundle can then be transported to another machine and replayed against a local PostgreSQL instance (any version) to generate the full HTML reports without any further access to the target server.
+
+```
+Target server                  Consultant / CI machine
+─────────────                  ──────────────────────
+zk_collect.ps1   ──bundle──►  zk_replay.ps1
+(collect once)                (replay anytime, offline)
+                               ↓
+                         offline_ultimate_report.html
+                         offline_perf_report.html
+```
+
+### What it collects
+
+**`catalog_snapshot.json`** (via `zk_catalog_dump.sql`)
+
+| Section | Contents |
+|---------|----------|
+| `databases` | Names, encoding, collation, size, XID age |
+| `schemas` | Schema names and owners |
+| `tables` | Schema, name, row estimate, size bytes, `relpages`, `relfrozenxid` |
+| `columns` | Name, type, nullability, default, alignment, storage |
+| `indexes` | Name, columns (`indkey`/`indclass`/`indoption`), uniqueness, validity, size |
+| `constraints` | Type, column keys, referenced table |
+| `unindexed_fks` | Pre-computed: FK constraints with no matching index |
+| `sequences` | Last value, min/max, increment, cycle |
+| `views` | Names and owning schema |
+| `functions_summary` | Count per schema/language |
+| `roles` | Name, flags (super/replication/login), password type (`md5`/`scram`/`none`) — **never the hash** |
+| `settings_key` | ~40 key GUCs (shared_buffers, wal_level, autovacuum settings, etc.) |
+| `planner_stats` | Per-column: `null_frac`, `avg_width`, `n_distinct`, `correlation` — no actual data |
+| `bloat_computed` | Pre-computed table/index bloat estimates |
+| `available_extensions` | Installable extension list + installed versions |
+| `_meta` | Block size, autovacuum_freeze_max_age, collection timestamp |
+
+**`stat_snapshot.json`** (via `zk_stat_dump.sql`)
+
+| Section | Contents |
+|---------|----------|
+| `stat_statements` | Top queries: timing, row counts, block I/O, WAL, plan time, JIT — **no bind parameters** |
+| `stat_tables` | Per-table: scan counts, tuple counts, dead tuples, vacuum/analyze timestamps |
+| `statio_tables` | Per-table: buffer hit/read counts, cache hit ratio |
+| `stat_indexes` | Per-index: scan count, tuple reads, size, uniqueness |
+| `stat_bgwriter` / `stat_checkpointer` | Checkpoint timing, buffer allocation (PG17+ split) |
+| `stat_database` | Per-database: transactions, cache hits, temp files, deadlocks |
+| `stat_replication` | Standby state, LSN positions, lag intervals |
+| `replication_slots` | Slot name, type, WAL retained bytes |
+| `activity_summary` | Connection counts by state — **no query text** |
+| `blocking_sessions` | Blocked PIDs, wait events, truncated query snippets (200 chars) |
+| `locks_summary` | Lock counts by type and mode — no row-level details |
+| `bloat_estimate` | Dead tuple ratio per table from `pg_stat_user_tables` |
+| `dup_indexes` | Pre-computed duplicate index groups |
+| `unused_indexes` | Zero-scan indexes with size |
+| `missing_index_candidates` | High seq-scan, large tables without indexes |
+| `stat_archiver` | WAL archive success/failure counts |
+| `stat_progress_vacuum` | In-flight vacuum progress (snapshot at collection time) |
+| `_meta` | PG version, uptime, cluster role, current WAL LSN |
+
+**`schema_dump.sql`** — DDL only (`pg_dump --schema-only`), no data.
+
+**`statistics_dump.sql`** — Planner statistics objects (`pg_dump --statistics-only`, PG18+ only).
+
+**`manifest.json`** — Collection metadata: timestamp, PG version, file inventory with sizes.
+
+### How to collect
+
+**Local PostgreSQL:**
+```powershell
+.\zk_collect.ps1 -PgHost localhost -Port 5432 -Database mydb -User postgres
+```
+
+**With password / custom output:**
+```powershell
+.\zk_collect.ps1 -PgHost db.example.com -User readonly `
+                 -Password secret -OutputDir ./audit_bundle
+```
+
+**Docker container:**
+```powershell
+.\zk_collect.ps1 -DockerContainer my-postgres-container `
+                 -Database mydb -User postgres
+```
+
+**Skip DDL dump (stats only):**
+```powershell
+.\zk_collect.ps1 -DockerContainer my-pg -NoSchemaDump
+```
+
+The output directory is auto-named `zk_audit_YYYYMMDD_HHMMSS` if `-OutputDir` is not set.
+
+### Bundle contents
+
+```
+zk_audit_20260508_143022/
+├── catalog_snapshot.json    ~80 KB   schema, indexes, roles, settings
+├── stat_snapshot.json       ~140 KB  query stats, table stats, bloat
+├── schema_dump.sql          ~20 KB   DDL structure (pg_dump --schema-only)
+├── statistics_dump.sql      ~38 KB   planner stats (PG18+ only)
+└── manifest.json            ~1 KB    collection metadata
+```
+
+Typical total size: **250–400 KB** for a moderately sized database.
+
+---
+
+## Offline Replay
+
+Once you have a bundle, run the two audit reports against a local PostgreSQL instance (any version, any database) without the target server being accessible at all.
+
+### How to replay
+
+**Against a local PostgreSQL:**
+```powershell
+.\zk_replay.ps1 -Bundle .\zk_audit_20260508_143022
+```
+
+**Against a Docker container (e.g. the pg-test-report container):**
+```powershell
+.\zk_replay.ps1 -Bundle .\zk_audit_20260508_143022 `
+                -DockerContainer pg-test-report `
+                -OutputDir .\reports
+```
+
+**Full parameter set:**
+```powershell
+.\zk_replay.ps1 `
+  -Bundle       .\zk_audit_20260508_143022 `
+  -PgHost       localhost `
+  -Port         5432 `
+  -Database     postgres `
+  -User         postgres `
+  -Password     secret `
+  -DockerContainer "" `
+  -OutputDir    .\reports
+```
+
+Output files written to `OutputDir` (defaults to the bundle directory):
+- `offline_ultimate_report.html`
+- `offline_perf_report.html`
+
+### How it works
+
+The replay orchestrator (`zk_replay.ps1`) performs four steps:
+
+1. **Load JSON** — Reads `catalog_snapshot.json` and `stat_snapshot.json` from the bundle and inserts them into temporary staging tables (`_zk_catalog`, `_zk_stat`) using PostgreSQL dollar-quoting.
+
+2. **Build shadow schema** (`zk_ingest.sql`) — Creates a `zk` schema containing shadow views and functions that expose the bundled data through the same interface as live PostgreSQL system catalogs:
+   - `zk.pg_stat_statements` — all version-variant column names unified via `COALESCE`
+   - `zk.pg_class`, `zk.pg_namespace` — backed by OID-fabricated tables from catalog JSON
+   - `zk.pg_database`, `zk.pg_settings`, `zk.pg_roles`, `zk.pg_sequences` — from catalog JSON
+   - `zk.pg_stat_user_tables`, `zk.pg_statio_user_tables`, `zk.pg_stat_user_indexes` — from stat JSON
+   - `zk.pg_is_in_recovery()`, `zk.pg_current_wal_lsn()`, `zk.current_setting()` — shadow functions returning values from `_meta`
+
+3. **Run reports** — Executes `ultimate_report.sql` and `pg_perf_report.sql` with `search_path = zk, pg_catalog, public`. With this search path, all unqualified catalog references (`pg_stat_statements`, `pg_database`, etc.) resolve to the shadow `zk` schema transparently. The reports require no modification.
+
+4. **Output HTML** — Each report is run with psql `-o` to capture the full HTML output.
+
+---
+
+## Version Compatibility Matrix
+
+### Collection (`zk_collect.ps1` + `zk_stat_dump.sql`)
+
+| PostgreSQL | `pg_stat_statements` | Plan time / WAL | JIT basic | JIT extended | `--statistics-only` |
+|-----------|---------------------|-----------------|-----------|--------------|---------------------|
+| PG 12 | `total_time` / `mean_time` names | — | — | — | — |
+| PG 13 | `total_exec_time` / `_exec_` suffix | plan time + WAL | — | — | — |
+| PG 14 | + `toplevel` | + `mean_plan_time`, `plans` | `jit_functions`, `jit_generation_time` | — | — |
+| PG 15–16 | unchanged | unchanged | unchanged | `jit_inlining_time`, `jit_optimization_time`, `jit_emission_time` | — |
+| PG 17 | `shared_blk_read_time` renamed | + `local_blk_*_time`, `temp_blk_*_time` | unchanged | unchanged | — |
+| PG 18 | + `stats_since` | unchanged | unchanged | unchanged | `pg_dump --statistics-only` |
+
+### Live reports
+
+| Report | PG 12 | PG 13 | PG 14 | PG 15 | PG 16 | PG 17 | PG 18 | PG 19 |
+|--------|-------|-------|-------|-------|-------|-------|-------|-------|
+| `ultimate_report.sql` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| `pg_perf_report.sql` | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| `ultimate_report_pg19.sql` | — | — | — | — | — | — | — | ✓ |
+
+### Offline replay (`zk_replay.ps1`)
+
+The replay target PostgreSQL version (the local instance used to run the reports) can be **any version from PG 12 to PG 18**. The shadow `zk.pg_stat_statements` view normalises all version-variant column names so the reports always receive the column set they expect.
+
+---
+
+## Limitations
+
+### Offline replay limitations
+
+| Limitation | Detail |
+|-----------|--------|
+| **Duplicate index detection** | `v_idx_duplicate` in `ultimate_report` requires `pg_index.indkey::regclass` which cannot be resolved against fabricated OIDs. The section returns empty in offline mode. Use the pre-computed `zk.v_dup_indexes_precomputed` view to access this data directly. |
+| **FK/unindexed-FK detection** | `v_fk_unindexed` requires `pg_constraint` cross-joins not available in offline mode. The section returns empty. Use `zk.v_unindexed_fks_precomputed` instead. |
+| **Live blocking detail** | `pg_blocking_pids()` always returns empty (`{}`) — locking state is a point-in-time snapshot, not a live view. Aggregate lock stats and session summaries are available from `zk.pg_stat_activity`. |
+| **Version detection for `\gset`** | The `current_setting('server_version_num')` shadow function reads from bundle `_meta`, so `\if :is_pg17` conditionals in the reports operate on the **target server version**, not the replay host version. |
+| **`pg_dump` DDL** | `schema_dump.sql` and `statistics_dump.sql` are included in the bundle but not used during replay — they are for reference / archival. |
+| **In-flight vacuum** | `pg_stat_progress_vacuum` returns empty: vacuum state is captured instantaneously and is almost always empty at collection time. |
+| **`pg_size_pretty`** | Available and correct — uses the real function from `pg_catalog` since it only formats numbers. |
+
+### Collection limitations
+
+| Limitation | Detail |
+|-----------|--------|
+| **No user data** | By design. No row data, no column values, no sequence data beyond metadata. |
+| **Query text** | `pg_stat_statements` query text is included (it is anonymised parameter-free SQL). Remove or truncate if the SQL itself is sensitive. |
+| **Blocking sessions** | Blocking session `query_snippet` captures up to 200 characters of the waiting query. Set `pg_stat_statements.track = none` or use `-NoStatDump` if this is a concern. |
+| **Password hashes** | `roles.pwd_type` captures only the hash algorithm type (`md5`, `scram-sha-256`, `none`) — never the actual hash. |
+| **Managed cloud (RDS/Aurora/Cloud SQL)** | Collection works but some sections (e.g. `pg_stat_archiver`, WAL LSN functions) may return `PERMISSION_DENIED` for restricted users. Use a role with `pg_read_all_stats`. |
+
+---
+
+## Use Cases
+
+### Consulting delivery — zero access to production
+Collect a bundle on-site (or have the client run `zk_collect.ps1`), then generate the full HTML audit reports at your desk without ever holding a connection open to the client's server.
+
+```
+Client runs:  .\zk_collect.ps1 -Database prod -User readonly
+Client sends: zk_audit_20260508_143022.zip  (< 500 KB)
+You run:      .\zk_replay.ps1 -Bundle .\zk_audit_20260508_143022
+You deliver:  offline_ultimate_report.html + offline_perf_report.html
+```
+
+### CI / scheduled audits
+Run `zk_collect.ps1` as a scheduled task or CI step, commit bundles to Git (they are tiny), and replay on any runner to generate and archive reports.
+
+```powershell
+# In a CI pipeline or Windows Task Scheduler:
+.\zk_collect.ps1 -DockerContainer prod-pg -OutputDir ./audit_$(Get-Date -Format yyyyMMdd)
+.\zk_replay.ps1  -Bundle ./audit_$(Get-Date -Format yyyyMMdd) -OutputDir ./reports
+```
+
+### Air-gapped or restricted environments
+Environments where the DBA workstation cannot reach the PostgreSQL host directly (firewall rules, jump hosts, VPN). Collect the bundle inside the network, transfer it out-of-band, replay anywhere.
+
+### Before/after comparison
+Collect bundles before and after a migration, index change, or configuration tuning. Keep both reports as HTML snapshots for side-by-side comparison.
+
+### Direct live audit
+For environments where you do have direct access, skip the ZK layer and run the reports directly:
+
+```bash
+psql -h prod-db -U readonly -d mydb -A -t -q -f ultimate_report.sql -o audit.html
 ```
 
 ---
 
-## 🛠️ Testing & Preview
+## Prerequisites
 
-The engine is verified for compatibility with **PostgreSQL 17**. If you want to visualize the UI without connecting to a live database, use the provided mock samples:
+### For live report generation
+- `psql` in `PATH` (part of the PostgreSQL client package)
+- Role with at minimum `pg_read_all_stats` or `pg_monitor`
+- `pg_stat_statements` extension enabled for query-level metrics (optional but recommended)
 
-- **Performance Preview**: `pg_perf_report.html`
-- **Audit Preview**: `ultimate_report.html` (Full health check)
+### For ZK collection (`zk_collect.ps1`)
+- PowerShell 5.1+ (Windows) — ships with Windows 10/11
+- `psql` and `pg_dump` in `PATH` (or Docker container if using `-DockerContainer`)
+- Docker CLI in `PATH` if using `-DockerContainer`
+- Read-only PostgreSQL role (write access not required)
 
-> [!TIP]
-> Open these files in any modern browser. You can toggle the **Language (🌍)** and **Theme (🌞/🌙)** in the header to preview the different states.
+### For ZK replay (`zk_replay.ps1`)
+- PowerShell 5.1+ (Windows)
+- A local PostgreSQL instance accessible via `psql` **or** a Docker container
+  - The replay target can be any PG version (12–18)
+  - Any database works; the replay creates `_zk_catalog` and `_zk_stat` staging tables and a `zk` schema in the target database (dropped on next run)
+- The replay target user needs: `CREATE SCHEMA`, `CREATE TABLE`, `CREATE FUNCTION` privileges
+- Typically superuser or a dedicated `audit_replay` role is appropriate
+
+### Tested environments
+
+| Environment | Collection | Replay |
+|------------|-----------|--------|
+| Local PostgreSQL (Windows, Linux, macOS) | ✓ | ✓ |
+| Docker container (`docker exec psql`) | ✓ | ✓ |
+| AWS RDS / Aurora | ✓ (with `pg_read_all_stats`) | n/a |
+| Azure Database for PostgreSQL | ✓ (with `pg_read_all_stats`) | n/a |
+| Google Cloud SQL | ✓ (with `pg_read_all_stats`) | n/a |
+| Air-gapped server | ✓ | replayed elsewhere |
 
 ---
 
-## ⚙️ Configuration Notes
-The scripts include internal `\pset` commands to handle rendering:
-- `\set quiet on`: Suppresses internal psql messages during generation.
-- `\pset format html`: Used in the performance report to let psql natively render result sets as HTML tables.
-- **Self-Contained**: All CSS and JavaScript are injected directly into the output. No external internet connection or dependencies are required.
-- **Graceful Failures**: Queries requiring elevated privileges (like `pg_stat_archiver`) are wrapped in existence/permission checks. If unauthorized, the section will simply return "No data" or "N/A" instead of terminating the script.
+## UI Features
+
+- **Dual-theme**: Premium "Deep Sea" dark mode by default; "Legacy White" mode for accessibility and printing
+- **Bilingual (EN/FR)**: Instant client-side translation of all UI elements and technical labels
+- **Query expansion**: Click any truncated SQL query, or use the global **SHORT / LONG** toggle to expand all queries at once
+- **Sticky headers**: Column headers remain visible when scrolling long tables
+- **Back-to-top**: Smooth scroll navigation for long reports
+- **Copy-to-clipboard**: Copy query snippets directly from report rows
+- **Visual risk indicators**: Color-coded badges — red (critical), orange (warning), blue (info)
+- **Version badges**: Dynamic PostgreSQL version shown in the report header
+- **Self-contained**: All CSS and JavaScript are embedded inline; reports open in any browser with no internet dependency
