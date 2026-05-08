@@ -25,6 +25,7 @@
 SELECT
   (current_setting('server_version_num')::int / 10000) AS major_ver,
   (current_setting('server_version_num')::int >= 170000) AS is_pg17,
+  (current_setting('server_version_num')::int >= 150000) AS is_pg15,
   (current_setting('server_version_num')::int >= 140000) AS is_pg14,
   (current_setting('server_version_num')::int >= 130000) AS is_pg13,
   EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements') AS has_pss
@@ -36,7 +37,7 @@ WITH
 meta AS (
   SELECT json_build_object(
     'type',              'zk_stat_dump',
-    'version',           '1.2',
+    'version',           '1.3',
     'generated_at',      now(),
     'pg_version',        version(),
     'pg_version_num',    current_setting('server_version_num')::int,
@@ -51,15 +52,17 @@ meta AS (
 ),
 
 -- ---------------------------------------------------------------------------
--- pg_stat_statements — 4 version branches (PG12 / PG13 / PG14-16 / PG17+)
+-- pg_stat_statements — 5 version branches (PG12 / PG13 / PG14 / PG15-16 / PG17+)
 --   PG12: total_time/mean_time/stddev_time, blk_read_time, no plan/wal/jit
---   PG13: +exec suffix rename, +wal_records/wal_bytes, +plan time
---   PG14-16: +jit_functions/generation_time, +toplevel, still blk_read_time
---   PG17+: shared_blk_read_time + local/temp variants
+--   PG13: +exec suffix rename, +wal_records/wal_bytes, +plan/mean_plan_time/plans
+--   PG14: +jit_functions/generation_time, +toplevel (basic JIT only)
+--   PG15-16: +jit_inlining/optimization/emission_time (extended JIT)
+--   PG17+: shared_blk_read_time + local/temp variants, +stats_since
 -- Outer \if :has_pss guard prevents parse-time "relation does not exist" errors
 -- when the extension is not loaded (CASE WHEN EXISTS is a runtime check only).
 \if :has_pss
 \if :is_pg17
+-- PG17+: renamed block timing cols, local/temp timing, stats_since
 stat_statements AS (
   SELECT json_agg(json_build_object(
     'queryid',               queryid,
@@ -77,6 +80,8 @@ stat_statements AS (
     'shared_blks_written',   shared_blks_written,
     'local_blks_hit',        local_blks_hit,
     'local_blks_read',       local_blks_read,
+    'local_blks_dirtied',    local_blks_dirtied,
+    'local_blks_written',    local_blks_written,
     'temp_blks_read',        temp_blks_read,
     'temp_blks_written',     temp_blks_written,
     'shared_blk_read_time',  round(shared_blk_read_time::numeric, 2),
@@ -88,15 +93,59 @@ stat_statements AS (
     'wal_records',           wal_records,
     'wal_bytes',             wal_bytes,
     'total_plan_time',       round(total_plan_time::numeric, 2),
+    'mean_plan_time',        round(mean_plan_time::numeric, 2),
+    'plans',                 plans,
     'jit_functions',         jit_functions,
     'jit_generation_time',   round(jit_generation_time::numeric, 2),
+    'jit_inlining_time',     round(jit_inlining_time::numeric, 2),
+    'jit_optimization_time', round(jit_optimization_time::numeric, 2),
+    'jit_emission_time',     round(jit_emission_time::numeric, 2),
     'toplevel',              toplevel,
     'stats_since',           stats_since
   ) ORDER BY total_exec_time DESC) AS v
   FROM pg_stat_statements
 ),
+\elif :is_pg15
+-- PG15-16: exec suffix, blk_read_time (old name), WAL, plan, full JIT extended, toplevel
+stat_statements AS (
+  SELECT json_agg(json_build_object(
+    'queryid',               queryid,
+    'query',                 query,
+    'calls',                 calls,
+    'total_exec_time',       round(total_exec_time::numeric, 2),
+    'mean_exec_time',        round(mean_exec_time::numeric, 2),
+    'stddev_exec_time',      round(stddev_exec_time::numeric, 2),
+    'min_exec_time',         round(min_exec_time::numeric, 2),
+    'max_exec_time',         round(max_exec_time::numeric, 2),
+    'rows',                  rows,
+    'shared_blks_hit',       shared_blks_hit,
+    'shared_blks_read',      shared_blks_read,
+    'shared_blks_dirtied',   shared_blks_dirtied,
+    'shared_blks_written',   shared_blks_written,
+    'local_blks_hit',        local_blks_hit,
+    'local_blks_read',       local_blks_read,
+    'local_blks_dirtied',    local_blks_dirtied,
+    'local_blks_written',    local_blks_written,
+    'temp_blks_read',        temp_blks_read,
+    'temp_blks_written',     temp_blks_written,
+    'blk_read_time',         round(blk_read_time::numeric, 2),
+    'blk_write_time',        round(blk_write_time::numeric, 2),
+    'wal_records',           wal_records,
+    'wal_bytes',             wal_bytes,
+    'total_plan_time',       round(total_plan_time::numeric, 2),
+    'mean_plan_time',        round(mean_plan_time::numeric, 2),
+    'plans',                 plans,
+    'jit_functions',         jit_functions,
+    'jit_generation_time',   round(jit_generation_time::numeric, 2),
+    'jit_inlining_time',     round(jit_inlining_time::numeric, 2),
+    'jit_optimization_time', round(jit_optimization_time::numeric, 2),
+    'jit_emission_time',     round(jit_emission_time::numeric, 2),
+    'toplevel',              toplevel
+  ) ORDER BY total_exec_time DESC) AS v
+  FROM pg_stat_statements
+),
 \elif :is_pg14
--- PG14-16: exec suffix, blk_read_time (old name), WAL, plan time, JIT, toplevel
+-- PG14: exec suffix, blk_read_time, WAL, plan, basic JIT only, toplevel
 stat_statements AS (
   SELECT json_agg(json_build_object(
     'queryid',             queryid,
@@ -114,6 +163,8 @@ stat_statements AS (
     'shared_blks_written', shared_blks_written,
     'local_blks_hit',      local_blks_hit,
     'local_blks_read',     local_blks_read,
+    'local_blks_dirtied',  local_blks_dirtied,
+    'local_blks_written',  local_blks_written,
     'temp_blks_read',      temp_blks_read,
     'temp_blks_written',   temp_blks_written,
     'blk_read_time',       round(blk_read_time::numeric, 2),
@@ -121,6 +172,8 @@ stat_statements AS (
     'wal_records',         wal_records,
     'wal_bytes',           wal_bytes,
     'total_plan_time',     round(total_plan_time::numeric, 2),
+    'mean_plan_time',      round(mean_plan_time::numeric, 2),
+    'plans',               plans,
     'jit_functions',       jit_functions,
     'jit_generation_time', round(jit_generation_time::numeric, 2),
     'toplevel',            toplevel
@@ -128,7 +181,7 @@ stat_statements AS (
   FROM pg_stat_statements
 ),
 \elif :is_pg13
--- PG13: exec suffix rename, WAL columns, plan time — no JIT, no toplevel
+-- PG13: exec suffix rename, WAL columns, plan/mean_plan_time/plans — no JIT, no toplevel
 stat_statements AS (
   SELECT json_agg(json_build_object(
     'queryid',             queryid,
@@ -146,13 +199,17 @@ stat_statements AS (
     'shared_blks_written', shared_blks_written,
     'local_blks_hit',      local_blks_hit,
     'local_blks_read',     local_blks_read,
+    'local_blks_dirtied',  local_blks_dirtied,
+    'local_blks_written',  local_blks_written,
     'temp_blks_read',      temp_blks_read,
     'temp_blks_written',   temp_blks_written,
     'blk_read_time',       round(blk_read_time::numeric, 2),
     'blk_write_time',      round(blk_write_time::numeric, 2),
     'wal_records',         wal_records,
     'wal_bytes',           wal_bytes,
-    'total_plan_time',     round(total_plan_time::numeric, 2)
+    'total_plan_time',     round(total_plan_time::numeric, 2),
+    'mean_plan_time',      round(mean_plan_time::numeric, 2),
+    'plans',               plans
   ) ORDER BY total_exec_time DESC) AS v
   FROM pg_stat_statements
 ),
@@ -175,6 +232,8 @@ stat_statements AS (
     'shared_blks_written', shared_blks_written,
     'local_blks_hit',      local_blks_hit,
     'local_blks_read',     local_blks_read,
+    'local_blks_dirtied',  local_blks_dirtied,
+    'local_blks_written',  local_blks_written,
     'temp_blks_read',      temp_blks_read,
     'temp_blks_written',   temp_blks_written,
     'blk_read_time',       round(blk_read_time::numeric, 2),
@@ -366,6 +425,7 @@ stat_database AS (
 -- ---------------------------------------------------------------------------
 stat_replication AS (
   SELECT json_agg(json_build_object(
+    'application_name', application_name,
     'client_addr',     client_addr,
     'state',           state,
     'sent_lsn',        sent_lsn,
