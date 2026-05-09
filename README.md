@@ -31,6 +31,10 @@ Standardized PostgreSQL assessment reports with a premium "Deep Sea" interface, 
 
 ---
 
+> **v2.0 highlights** — The collector now captures **every database in the cluster** in a single run and embeds the PostgreSQL major version in the bundle directory name (`zk_audit_PG17_YYYYMMDD_HHMMSS`). Per-database files (`catalog_db_<db>.json`, `stat_db_<db>.json`) are written into one bundle; the replayer generates a dedicated report pair for each database. Legacy v1.0 bundles (`catalog_snapshot.json` / `stat_snapshot.json`) are still supported transparently.
+
+---
+
 ## Report Overview
 
 | File | Purpose | Compatibility |
@@ -82,23 +86,34 @@ Sections that lack permission return "N/A" or "No data" instead of failing the e
 
 ## Zero Knowledge (ZK) Collection System
 
-The ZK system lets you audit a PostgreSQL instance **without extracting user data**. It captures schema structure, catalog metadata, and statistical counters — nothing from actual application tables — then bundles the result into a portable JSON snapshot.
+The ZK system lets you audit a PostgreSQL **cluster** (all databases) **without extracting user data**. It captures schema structure, catalog metadata, and statistical counters — nothing from actual application tables — then bundles the result into a portable JSON snapshot.
 
-The bundle can then be transported to another machine and replayed against a local PostgreSQL instance (any version) to generate the full HTML reports without any further access to the target server.
+The bundle can be transported to another machine and replayed against a local PostgreSQL instance (any version) to generate the full HTML reports without any further access to the target server.
 
 ```
-Target server                  Consultant / CI machine
-─────────────                  ──────────────────────
-zk_collect.ps1   ──bundle──►  zk_replay.ps1
-(collect once)                (replay anytime, offline)
-                               ↓
-                         offline_ultimate_report.html
-                         offline_perf_report.html
+Target cluster (postgres:5432)          Consultant / CI machine
+──────────────────────────────          ──────────────────────────────────────
+zk_collect.sh   ──bundle──►  zk_replay.sh
+(all databases,               (one report pair per database)
+ one bundle dir)               ↓
+                         offline_ultimate_report_mydb.html
+                         offline_perf_report_mydb.html
+                         offline_ultimate_report_analytics.html
+                         offline_perf_report_analytics.html
+                         ...
+```
+
+**Bundle directory name** embeds the PostgreSQL major version for traceability:
+```
+zk_audit_PG17_20260508_143022/   ← collected from a PG 17 cluster
+zk_audit_PG16_20260508_143022/   ← collected from a PG 16 cluster
 ```
 
 ### What it collects
 
-**`catalog_snapshot.json`** (via `zk_catalog_dump.sql`)
+One file pair is written **per database** in the cluster. The schema below applies to each file. File names follow the pattern `catalog_db_<dbname>.json` and `stat_db_<dbname>.json`.
+
+**`catalog_db_<dbname>.json`** (via `zk_catalog_dump.sql`)
 
 | Section | Contents |
 |---------|----------|
@@ -117,9 +132,9 @@ zk_collect.ps1   ──bundle──►  zk_replay.ps1
 | `planner_stats` | Per-column: `null_frac`, `avg_width`, `n_distinct`, `correlation` — no actual data |
 | `bloat_computed` | Pre-computed table/index bloat estimates |
 | `available_extensions` | Installable extension list + installed versions |
-| `_meta` | Block size, autovacuum_freeze_max_age, collection timestamp |
+| `_meta` | Block size, autovacuum_freeze_max_age, collection timestamp, **pg_version** |
 
-**`stat_snapshot.json`** (via `zk_stat_dump.sql`)
+**`stat_db_<dbname>.json`** (via `zk_stat_dump.sql`)
 
 | Section | Contents |
 |---------|----------|
@@ -142,140 +157,210 @@ zk_collect.ps1   ──bundle──►  zk_replay.ps1
 | `stat_progress_vacuum` | In-flight vacuum progress (snapshot at collection time) |
 | `_meta` | PG version, uptime, cluster role, current WAL LSN |
 
-**`schema_dump.sql`** — DDL only (`pg_dump --schema-only`), no data.
+**`schema_dump_<dbname>.sql`** — DDL only (`pg_dump --schema-only`), no data.
 
-**`statistics_dump.sql`** — Planner statistics objects (`pg_dump --statistics-only`, PG18+ only).
+**`statistics_dump_<dbname>.sql`** — Planner statistics objects (`pg_dump --statistics-only`, PG18+ only).
 
-**`manifest.json`** — Collection metadata: timestamp, PG version, file inventory with sizes.
+**`manifest.json`** — Collection metadata: timestamp, PG major version (`pg_major`), databases array, file inventory with sizes.
 
 ### How to collect
 
 Both `zk_collect.ps1` (PowerShell, Windows) and `zk_collect.sh` (bash, Linux/macOS/WSL) are provided. They are feature-identical and produce the same bundle format.
 
-**Local PostgreSQL (PowerShell):**
+By default the collector discovers **all connectable databases** in the cluster (excluding `template0` and `template1`) and collects them in a single bundle. Use `--database` / `-Database` to restrict collection to one database.
+
+**Collect entire cluster — all databases (recommended):**
+```bash
+# bash
+./zk_collect.sh --host localhost --port 5432 --user postgres
+# → zk_audit_PG17_20260508_143022/
+#     catalog_db_postgres.json
+#     catalog_db_myapp.json
+#     catalog_db_analytics.json
+#     stat_db_postgres.json
+#     stat_db_myapp.json
+#     stat_db_analytics.json
+#     manifest.json
+```
 ```powershell
-.\zk_collect.ps1 -PgHost localhost -Port 5432 -Database mydb -User postgres
+# PowerShell
+.\zk_collect.ps1 -PgHost localhost -Port 5432 -User postgres
 ```
 
-**Local PostgreSQL (bash):**
+**Single-database collection (backward compat / targeted):**
 ```bash
-./zk_collect.sh --host localhost --port 5432 --database mydb --user postgres
+# bash
+./zk_collect.sh --host localhost --database mydb --user postgres
+# → zk_audit_PG17_20260508_143022/
+#     catalog_db_mydb.json
+#     stat_db_mydb.json
+#     manifest.json
+```
+```powershell
+# PowerShell
+.\zk_collect.ps1 -PgHost localhost -Database mydb -User postgres
 ```
 
 **With password / custom output:**
-```powershell
-# PowerShell
-.\zk_collect.ps1 -PgHost db.example.com -User readonly `
-                 -Password secret -OutputDir ./audit_bundle
-```
 ```bash
 # bash
 ./zk_collect.sh --host db.example.com --user readonly \
                 --password secret --output-dir ./audit_bundle
 ```
-
-**Docker container:**
 ```powershell
 # PowerShell
-.\zk_collect.ps1 -DockerContainer my-postgres-container `
-                 -Database mydb -User postgres
+.\zk_collect.ps1 -PgHost db.example.com -User readonly `
+                 -Password secret -OutputDir ./audit_bundle
 ```
+
+**Docker container (entire cluster):**
 ```bash
 # bash
-./zk_collect.sh --docker-container my-postgres-container \
-                --database mydb --user postgres
+./zk_collect.sh --docker-container my-postgres-container --user postgres
+```
+```powershell
+# PowerShell
+.\zk_collect.ps1 -DockerContainer my-postgres-container -User postgres
 ```
 
 **Skip DDL dump (stats only):**
-```powershell
-.\zk_collect.ps1 -DockerContainer my-pg -NoSchemaDump
-```
 ```bash
 ./zk_collect.sh --docker-container my-pg --no-schema-dump
 ```
+```powershell
+.\zk_collect.ps1 -DockerContainer my-pg -NoSchemaDump
+```
 
-The output directory is auto-named `zk_audit_YYYYMMDD_HHMMSS` if not set.
+The output directory is auto-named `zk_audit_PG<MAJOR>_YYYYMMDD_HHMMSS` if not set.
 
 ### Bundle contents
 
+**Multi-database bundle (v2.0, default):**
 ```
-zk_audit_20260508_143022/
-├── catalog_snapshot.json    ~80 KB   schema, indexes, roles, settings
-├── stat_snapshot.json       ~140 KB  query stats, table stats, bloat
-├── schema_dump.sql          ~20 KB   DDL structure (pg_dump --schema-only)
-├── statistics_dump.sql      ~38 KB   planner stats (PG18+ only)
-└── manifest.json            ~1 KB    collection metadata
+zk_audit_PG17_20260508_143022/
+├── catalog_db_postgres.json       ~9 KB    schema, indexes, roles, settings
+├── catalog_db_myapp.json          ~80 KB   "
+├── catalog_db_analytics.json      ~45 KB   "
+├── stat_db_postgres.json          ~34 KB   query stats, table stats, bloat
+├── stat_db_myapp.json             ~200 KB  "
+├── stat_db_analytics.json         ~140 KB  "
+├── schema_dump_myapp.sql          ~20 KB   DDL (pg_dump --schema-only)
+├── schema_dump_analytics.sql      ~12 KB   "
+├── statistics_dump_myapp.sql      ~38 KB   planner stats (PG18+ only)
+└── manifest.json                  ~1 KB    pg_major, databases[], file inventory
 ```
 
-Typical total size: **250–400 KB** for a moderately sized database.
+**`manifest.json` structure:**
+```json
+{
+  "collected_at": "2026-05-08T14:30:22Z",
+  "pg_version": "PostgreSQL 17.4 ...",
+  "pg_major": 17,
+  "databases": ["postgres", "myapp", "analytics"],
+  "files": { "catalog_db_myapp.json": 81920, ... }
+}
+```
+
+**Single-database bundle** (when `--database` is specified):
+```
+zk_audit_PG17_20260508_143022/
+├── catalog_db_mydb.json
+├── stat_db_mydb.json
+├── schema_dump_mydb.sql
+└── manifest.json
+```
+
+**Legacy v1.0 bundle** (collected before v2.0, still replayed automatically):
+```
+zk_audit_20260508_143022/
+├── catalog_snapshot.json
+├── stat_snapshot.json
+└── manifest.json
+```
+
+Typical total size: **250–400 KB per database**; a 3-database cluster is typically **700 KB – 1.2 MB**.
 
 ---
 
 ## Offline Replay
 
-Once you have a bundle, run the two audit reports against a local PostgreSQL instance (any version, any database) without the target server being accessible at all.
+Once you have a bundle, run the audit reports against a local PostgreSQL instance (any version, any database) without the target server being accessible at all. **One report pair is generated per database in the bundle.**
 
 ### How to replay
 
-Both `zk_replay.ps1` (PowerShell, Windows) and `zk_replay.sh` (bash, Linux/macOS/WSL) are provided.
+Both `zk_replay.ps1` (PowerShell, Windows) and `zk_replay.sh` (bash, Linux/macOS/WSL) are provided. Both automatically detect v2.0 multi-database bundles and legacy v1.0 single-database bundles.
 
-**Against a local PostgreSQL (PowerShell):**
-```powershell
-.\zk_replay.ps1 -Bundle .\zk_audit_20260508_143022
-```
-
-**Against a local PostgreSQL (bash):**
+**Against a Docker container (recommended for isolation):**
 ```bash
-./zk_replay.sh --bundle ./zk_audit_20260508_143022
+# bash — multi-database bundle
+./zk_replay.sh --bundle ./zk_audit_PG17_20260508_143022 \
+               --docker-container pg-replay \
+               --output-dir ./reports
+# → reports/offline_ultimate_report_postgres.html
+# → reports/offline_perf_report_postgres.html
+# → reports/offline_ultimate_report_myapp.html
+# → reports/offline_perf_report_myapp.html
+# → reports/offline_ultimate_report_analytics.html
+# → reports/offline_perf_report_analytics.html
 ```
-
-**Against a Docker container:**
 ```powershell
 # PowerShell
-.\zk_replay.ps1 -Bundle .\zk_audit_20260508_143022 `
-                -DockerContainer pg-test-report `
+.\zk_replay.ps1 -Bundle .\zk_audit_PG17_20260508_143022 `
+                -DockerContainer pg-replay `
                 -OutputDir .\reports
 ```
+
+**Against a local PostgreSQL:**
 ```bash
-# bash
-./zk_replay.sh --bundle ./zk_audit_20260508_143022 \
-               --docker-container pg-test-report \
-               --output-dir ./reports
+./zk_replay.sh --bundle ./zk_audit_PG17_20260508_143022
 ```
-
-**Full parameter set:**
 ```powershell
-.\zk_replay.ps1 `
-  -Bundle       .\zk_audit_20260508_143022 `
-  -PgHost       localhost `
-  -Port         5432 `
-  -Database     postgres `
-  -User         postgres `
-  -Password     secret `
-  -DockerContainer "" `
-  -OutputDir    .\reports
+.\zk_replay.ps1 -Bundle .\zk_audit_PG17_20260508_143022
 ```
 
-Output files written to `OutputDir` (defaults to the bundle directory):
-- `offline_ultimate_report.html`
-- `offline_perf_report.html`
+**JSON output (for LLM ingestion):**
+```bash
+./zk_replay.sh --bundle ./zk_audit_PG17_20260508_143022 \
+               --docker-container pg-replay --json
+# → reports/offline_ultimate_report_myapp.json
+# → reports/offline_perf_report_myapp.json
+```
+
+**Legacy v1.0 bundle (backward compat — no changes needed):**
+```bash
+./zk_replay.sh --bundle ./zk_audit_20260508_143022
+# Detected as legacy v1.0 → produces:
+# → offline_ultimate_report.html
+# → offline_perf_report.html
+```
+
+Output files written to `--output-dir` (defaults to the bundle directory).
+
+**Output naming:**
+
+| Bundle format | Report files |
+|--------------|-------------|
+| v2.0 multi-DB | `offline_ultimate_report_<dbname>.html/json` per database |
+| v1.0 legacy | `offline_ultimate_report.html/json` (no suffix) |
 
 ### How it works
 
-The replay orchestrator (`zk_replay.ps1`) performs four steps:
+The replayer (`zk_replay.sh` / `zk_replay.ps1`) performs these steps **for each database** in the bundle:
 
-1. **Load JSON** — Reads `catalog_snapshot.json` and `stat_snapshot.json` from the bundle and inserts them into temporary staging tables (`_zk_catalog`, `_zk_stat`) using PostgreSQL dollar-quoting.
+1. **Detect bundle format** — Scans for `catalog_db_*.json` (v2.0) or `catalog_snapshot.json` (legacy v1.0). Processes all databases found.
 
-2. **Build shadow schema** (`zk_ingest.sql`) — Creates a `zk` schema containing shadow views and functions that expose the bundled data through the same interface as live PostgreSQL system catalogs:
+2. **Load JSON** — Reads `catalog_db_<db>.json` and `stat_db_<db>.json` and inserts them into temporary staging tables (`_zk_catalog`, `_zk_stat`) using PostgreSQL dollar-quoting.
+
+3. **Build shadow schema** (`zk_ingest.sql`) — Creates a `zk` schema with shadow views and functions that expose the bundled data through the same interface as live PostgreSQL system catalogs:
    - `zk.pg_stat_statements` — all version-variant column names unified via `COALESCE`
    - `zk.pg_class`, `zk.pg_namespace` — backed by OID-fabricated tables from catalog JSON
    - `zk.pg_database`, `zk.pg_settings`, `zk.pg_roles`, `zk.pg_sequences` — from catalog JSON
    - `zk.pg_stat_user_tables`, `zk.pg_statio_user_tables`, `zk.pg_stat_user_indexes` — from stat JSON
    - `zk.pg_is_in_recovery()`, `zk.pg_current_wal_lsn()`, `zk.current_setting()` — shadow functions returning values from `_meta`
 
-3. **Run reports** — Executes `ultimate_report.sql` and `pg_perf_report.sql` with `search_path = zk, pg_catalog, public`. With this search path, all unqualified catalog references (`pg_stat_statements`, `pg_database`, etc.) resolve to the shadow `zk` schema transparently. The reports require no modification.
+4. **Run reports** — Executes `ultimate_report.sql` and `pg_perf_report.sql` with `search_path = zk, pg_catalog, public`. All unqualified catalog references resolve to the shadow `zk` schema transparently. The reports require no modification.
 
-4. **Output HTML** — Each report is run with psql `-o` to capture the full HTML output.
+5. **Output** — Each report is run with psql `-o` to capture the full HTML/JSON output, suffixed with the database name.
 
 ---
 
@@ -420,12 +505,14 @@ All three report types can output structured JSON instead of HTML. Feed the JSON
 ### Architecture
 
 ```
-ZK bundle                 Replay container              LLM
-──────────                ─────────────────             ───
-catalog_snapshot.json  ─► offline_ultimate_report.json ─►
-stat_snapshot.json     ─► offline_perf_report.json     ─► diagnosis
-                                                        ─►
-sys_collect bundle     ─► sys_report.json              ─►
+ZK bundle (v2.0)                  Replay container                    LLM
+────────────────                  ────────────────                    ───
+catalog_db_myapp.json  ─► offline_ultimate_report_myapp.json ─►
+stat_db_myapp.json     ─► offline_perf_report_myapp.json     ─► diagnosis
+catalog_db_analytics.json ► offline_ultimate_report_analytics.json ─►
+stat_db_analytics.json   ─► offline_perf_report_analytics.json    ─►
+                                                                    ─►
+sys_collect bundle     ─► sys_report.json                          ─►
 ```
 
 ### Files
@@ -442,19 +529,21 @@ The JSON SQL companions work in both **live** mode (direct psql) and **offline**
 
 **ZK offline replay → JSON:**
 ```bash
-# Bash (Linux / WSL)
-./zk_replay.sh --bundle ./my_bundle \
+# Bash (Linux / WSL) — multi-database bundle
+./zk_replay.sh --bundle ./zk_audit_PG17_20260508_143022 \
                --docker-container pg-test-report \
                --json
 
-# Output
-# zk_json_reports/offline_ultimate_report.json
-# zk_json_reports/offline_perf_report.json
+# Output (one pair per database)
+# reports/offline_ultimate_report_postgres.json
+# reports/offline_perf_report_postgres.json
+# reports/offline_ultimate_report_myapp.json
+# reports/offline_perf_report_myapp.json
 ```
 
 **PowerShell:**
 ```powershell
-.\zk_replay.ps1 -Bundle .\my_bundle `
+.\zk_replay.ps1 -Bundle .\zk_audit_PG17_20260508_143022 `
                 -DockerContainer pg-test-report `
                 -Json
 ```
@@ -591,9 +680,13 @@ Format the output as a prioritized action plan.
 | `pg_perf_report.sql` | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | `ultimate_report_pg19.sql` | — | — | — | — | — | — | — | ✓ |
 
-### Offline replay (`zk_replay.ps1`)
+### Offline replay (`zk_replay.ps1` / `zk_replay.sh`)
 
 The replay target PostgreSQL version (the local instance used to run the reports) can be **any version from PG 12 to PG 18**. The shadow `zk.pg_stat_statements` view normalises all version-variant column names so the reports always receive the column set they expect.
+
+Both replayers support:
+- **v2.0 bundles** (`catalog_db_*.json`) — auto-detected; one report pair generated per database
+- **Legacy v1.0 bundles** (`catalog_snapshot.json`) — backward compat; single report pair with no database suffix
 
 ---
 
@@ -626,34 +719,59 @@ The replay target PostgreSQL version (the local instance used to run the reports
 ## Use Cases
 
 ### Consulting delivery — zero access to production
-Collect a bundle on-site (or have the client run `zk_collect.ps1`), then generate the full HTML audit reports at your desk without ever holding a connection open to the client's server.
+Collect the entire cluster in one run (or have the client run `zk_collect.ps1`), then generate the full audit reports at your desk — one report pair per database — without ever holding a connection open to the client's server.
 
 ```
-Client runs:  .\zk_collect.ps1 -Database prod -User readonly
-Client sends: zk_audit_20260508_143022.zip  (< 500 KB)
-You run:      .\zk_replay.ps1 -Bundle .\zk_audit_20260508_143022
-You deliver:  offline_ultimate_report.html + offline_perf_report.html
+Client runs:  .\zk_collect.ps1 -User readonly
+              # → collects ALL databases in the cluster
+Client sends: zk_audit_PG17_20260508_143022.zip  (< 1.5 MB for 3 databases)
+You run:      .\zk_replay.ps1 -Bundle .\zk_audit_PG17_20260508_143022
+You deliver:  offline_ultimate_report_prod.html
+              offline_perf_report_prod.html
+              offline_ultimate_report_analytics.html
+              offline_perf_report_analytics.html
+              ...
+```
+
+### Multi-database cluster audit
+A single collect + replay covers every database in the cluster, including `postgres` (roles, settings, cluster-level stats). Each database gets its own dedicated report pair so you can assess schema isolation, per-database bloat, and query patterns independently.
+
+```bash
+./zk_collect.sh --docker-container prod-pg --user postgres
+# → zk_audit_PG17_20260508_143022/ with one file pair per database
+
+./zk_replay.sh  --bundle ./zk_audit_PG17_20260508_143022 \
+                --docker-container pg-replay --output-dir ./reports
+# → reports/ with offline_*_<dbname>.html for every database
 ```
 
 ### CI / scheduled audits
-Run `zk_collect.ps1` as a scheduled task or CI step, commit bundles to Git (they are tiny), and replay on any runner to generate and archive reports.
+Run `zk_collect.sh` as a scheduled task or CI step, commit bundles to Git (they are small), and replay on any runner to generate and archive reports.
 
-```powershell
-# Windows / PowerShell CI:
-.\zk_collect.ps1 -DockerContainer prod-pg -OutputDir ./audit_$(Get-Date -Format yyyyMMdd)
-.\zk_replay.ps1  -Bundle ./audit_$(Get-Date -Format yyyyMMdd) -OutputDir ./reports
-```
 ```bash
 # Linux / macOS / WSL CI:
-./zk_collect.sh --docker-container prod-pg --output-dir ./audit_$(date +%Y%m%d)
-./zk_replay.sh  --bundle ./audit_$(date +%Y%m%d) --output-dir ./reports
+./zk_collect.sh --docker-container prod-pg
+./zk_replay.sh  --bundle ./zk_audit_PG*_$(date +%Y%m%d)_* --output-dir ./reports
+```
+```powershell
+# Windows / PowerShell CI:
+.\zk_collect.ps1 -DockerContainer prod-pg
+.\zk_replay.ps1  -Bundle (Get-Item ".\zk_audit_PG*_$(Get-Date -Format yyyyMMdd)*") `
+                 -OutputDir .\reports
 ```
 
 ### Air-gapped or restricted environments
 Environments where the DBA workstation cannot reach the PostgreSQL host directly (firewall rules, jump hosts, VPN). Collect the bundle inside the network, transfer it out-of-band, replay anywhere.
 
 ### Before/after comparison
-Collect bundles before and after a migration, index change, or configuration tuning. Keep both reports as HTML snapshots for side-by-side comparison.
+Collect bundles before and after a migration, index change, or configuration tuning. The PG version and timestamp in the bundle name make it easy to keep snapshots organized for side-by-side comparison.
+
+```bash
+./zk_collect.sh --host db --user postgres --output-dir ./before_migration
+# run migration
+./zk_collect.sh --host db --user postgres --output-dir ./after_migration
+# compare offline_perf_report_myapp.html from each bundle
+```
 
 ### Direct live audit
 For environments where you do have direct access, skip the ZK layer and run the reports directly:
@@ -673,17 +791,21 @@ psql -h prod-db -U readonly -d mydb -A -t -q -f ultimate_report.sql -o audit.htm
 
 ### For ZK collection
 
+> Full prerequisites (required grants, optional pg_stat_statements) are documented at the top of `zk_catalog_dump.sql` and `zk_stat_dump.sql`.
+
 **`zk_collect.ps1` (Windows / PowerShell):**
 - PowerShell 5.1+ — ships with Windows 10/11
 - `psql` and `pg_dump` in `PATH` (or Docker container if using `-DockerContainer`)
 - Docker CLI in `PATH` if using `-DockerContainer`
-- Read-only PostgreSQL role (write access not required)
+- Read-only PostgreSQL role with `pg_read_all_stats` or `pg_monitor` (write access not required)
+- `pg_stat_statements` loaded and enabled in `shared_preload_libraries` (optional — query-level metrics only; gracefully skipped if absent)
 
 **`zk_collect.sh` (Linux / macOS / WSL):**
-- bash 4+
+- bash 4.3+
 - `psql` and `pg_dump` in `PATH` — install via `apt install postgresql-client` or `brew install libpq`
 - Docker CLI in `PATH` if using `--docker-container`
-- Read-only PostgreSQL role (write access not required)
+- Read-only PostgreSQL role with `pg_read_all_stats` or `pg_monitor`
+- `pg_stat_statements` (optional; gracefully skipped if absent)
 
 ### For ZK replay
 
@@ -698,6 +820,14 @@ psql -h prod-db -U readonly -d mydb -A -t -q -f ultimate_report.sql -o audit.htm
 - bash 4+
 - `psql` in `PATH` (`postgresql-client` package) **or** a Docker container for replay
 - Same privilege requirements as the PowerShell variant
+
+### Integration test
+
+`test_multidb.sh` is an end-to-end integration test that spins up a `postgres:17` Docker container, creates three realistic test databases (`zktest_app`, `zktest_reporting`, `zktest_legacy`), runs collect + replay, and asserts ~48 checks including multi-database isolation and legacy v1.0 backward compatibility.
+
+```bash
+./test_multidb.sh --container zk-test --json
+```
 
 ### Tested environments
 
