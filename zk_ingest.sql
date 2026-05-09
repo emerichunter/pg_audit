@@ -46,13 +46,22 @@ END $$;
 -- Namespace OIDs start at 900000, table OIDs at 800000, index OIDs at 700000
 -- ---------------------------------------------------------------------------
 
+-- NOTE: NULLIF + COALESCE pattern handles both SQL NULL and JSON null.
+-- json_agg() over zero rows returns SQL NULL; json_build_object wraps it as JSON null
+-- (the literal 'null'::jsonb). jsonb_array_elements(JSON null) throws
+-- "cannot extract elements from a scalar". NULLIF converts JSON null → SQL NULL;
+-- COALESCE converts SQL NULL → '[]'::jsonb so the SRF returns zero rows safely.
+-- In CREATE TABLE AS the WHERE clause cannot be pushed down (it references elem),
+-- so the guard must live inside the jsonb_array_elements argument.
+
 CREATE TABLE zk._zk_ns AS
   SELECT
     nspname,
     (900000 + row_number() OVER (ORDER BY nspname))::oid AS ns_oid
   FROM (
     SELECT DISTINCT elem->>'schema' AS nspname
-    FROM _zk_catalog, jsonb_array_elements(data->'tables') elem
+    FROM _zk_catalog,
+         jsonb_array_elements(COALESCE(NULLIF(data->'tables','null'::jsonb),'[]'::jsonb)) elem
     WHERE elem->>'schema' IS NOT NULL
   ) t;
 
@@ -65,8 +74,9 @@ CREATE TABLE zk._zk_tables AS
     COALESCE((elem->>'relpages')::int, 0)         AS relpages,
     COALESCE((elem->>'row_estimate')::float8, 0)  AS reltuples,
     COALESCE((elem->>'total_bytes')::bigint, 0)   AS total_bytes
-  FROM _zk_catalog, jsonb_array_elements(data->'tables') elem
-  JOIN zk._zk_ns ns ON ns.nspname = elem->>'schema';
+  FROM _zk_catalog,
+       jsonb_array_elements(COALESCE(NULLIF(data->'tables','null'::jsonb),'[]'::jsonb)) elem
+  LEFT JOIN zk._zk_ns ns ON ns.nspname = elem->>'schema';
 
 CREATE TABLE zk._zk_indexes AS
   SELECT
@@ -80,8 +90,9 @@ CREATE TABLE zk._zk_indexes AS
     COALESCE((elem->>'is_unique')::boolean, false) AS indisunique,
     COALESCE((elem->>'is_primary')::boolean, false) AS indisprimary,
     COALESCE((elem->>'is_valid')::boolean, true)    AS indisvalid
-  FROM _zk_catalog, jsonb_array_elements(data->'indexes') elem
-  JOIN zk._zk_tables t ON t.schemaname = elem->>'schema' AND t.tablename = elem->>'table';
+  FROM _zk_catalog,
+       jsonb_array_elements(COALESCE(NULLIF(data->'indexes','null'::jsonb),'[]'::jsonb)) elem
+  LEFT JOIN zk._zk_tables t ON t.schemaname = elem->>'schema' AND t.tablename = elem->>'table';
 
 -- ---------------------------------------------------------------------------
 -- Shadow functions — return values from the captured JSON snapshots
@@ -272,7 +283,7 @@ CREATE OR REPLACE VIEW zk.pg_stat_user_tables AS
     COALESCE((elem->>'autoanalyze_count')::bigint, 0) AS autoanalyze_count
   FROM _zk_stat, jsonb_array_elements(data->'stat_tables') elem
   JOIN zk._zk_tables t ON t.schemaname = elem->>'schema' AND t.tablename = elem->>'table'
-  WHERE data->'stat_tables' IS NOT NULL;
+  WHERE data->'stat_tables' IS NOT NULL AND data->>'stat_tables' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_statio_user_tables shadow view
@@ -293,7 +304,7 @@ CREATE OR REPLACE VIEW zk.pg_statio_user_tables AS
     COALESCE((elem->>'tidx_blks_hit')::bigint, 0)         AS tidx_blks_hit
   FROM _zk_stat, jsonb_array_elements(data->'statio_tables') elem
   JOIN zk._zk_tables t ON t.schemaname = elem->>'schema' AND t.tablename = elem->>'table'
-  WHERE data->'statio_tables' IS NOT NULL;
+  WHERE data->'statio_tables' IS NOT NULL AND data->>'statio_tables' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_stat_statements shadow view
@@ -364,7 +375,7 @@ CREATE OR REPLACE VIEW zk.pg_stat_statements AS
     (elem->>'toplevel')::boolean                              AS toplevel,
     (elem->>'stats_since')::timestamptz                       AS stats_since
   FROM _zk_stat, jsonb_array_elements(data->'stat_statements') elem
-  WHERE data->'stat_statements' IS NOT NULL;
+  WHERE data->'stat_statements' IS NOT NULL AND data->>'stat_statements' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_stat_statements_info (PG14+)
@@ -435,7 +446,7 @@ CREATE OR REPLACE VIEW zk.pg_stat_database AS
     COALESCE((elem->>'blk_write_time')::float8, 0)           AS blk_write_time,
     (elem->>'stats_reset')::timestamptz                      AS stats_reset
   FROM _zk_stat, jsonb_array_elements(data->'stat_database') elem
-  WHERE data->'stat_database' IS NOT NULL;
+  WHERE data->'stat_database' IS NOT NULL AND data->>'stat_database' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_stat_replication shadow view
@@ -697,7 +708,7 @@ CREATE OR REPLACE VIEW zk.pg_sequences AS
     (elem->>'cache_size')::bigint  AS cache_size,
     (elem->>'data_type')::regtype  AS data_type
   FROM _zk_catalog, jsonb_array_elements(data->'sequences') elem
-  WHERE data->'sequences' IS NOT NULL;
+  WHERE data->'sequences' IS NOT NULL AND data->>'sequences' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_stats shadow view (planner stats, for bloat estimates)
@@ -713,7 +724,7 @@ CREATE OR REPLACE VIEW zk.pg_stats AS
     COALESCE((elem->>'n_distinct')::float4, 0)     AS n_distinct,
     COALESCE((elem->>'correlation')::float4, 0)    AS correlation
   FROM _zk_catalog, jsonb_array_elements(data->'planner_stats') elem
-  WHERE data->'planner_stats' IS NOT NULL;
+  WHERE data->'planner_stats' IS NOT NULL AND data->>'planner_stats' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_constraint / pg_attribute — empty (complex joins use pre-computed JSON)

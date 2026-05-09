@@ -2,6 +2,26 @@
 --  ZK Catalog Dump  v1.1
 --  Zero Knowledge schema/structure snapshot — no user data collected
 --
+-- =============================================================================
+--  PREREQUISITES
+-- =============================================================================
+--
+--  Required:
+--    * PostgreSQL 12 or later
+--    * Role with pg_monitor or pg_read_all_stats privilege (or superuser).
+--      Minimum manual grants:
+--        GRANT pg_monitor TO <user>;
+--        -- or individually:
+--        GRANT SELECT ON pg_stats       TO <user>;
+--        GRANT SELECT ON pg_stat_archiver TO <user>;
+--    * track_counts = on  (PostgreSQL default)
+--
+--  Optional:
+--    * pg_stat_statements installed and activated — not used in catalog dump,
+--      but required for zk_stat_dump.sql to capture query-level statistics.
+--
+-- =============================================================================
+--
 --  Covers every source queried by ultimate_report.sql:
 --    databases (+ XID wraparound age), schemas, tables (+ relpages, relfrozenxid),
 --    columns (+ alignment/length for padding analysis), indexes, constraints
@@ -9,8 +29,8 @@
 --    extensions, tablespaces, roles (password hash TYPE only), key settings,
 --    planner column statistics (pg_stats), unindexed FK pre-computed list
 --
---  Usage:
---    psql -U <user> -d <db> -A -t -q -f zk_catalog_dump.sql -o catalog_snapshot.json
+--  Usage (called automatically by zk_collect.sh):
+--    psql -U <user> -d <db> -A -t -q -f zk_catalog_dump.sql -o catalog_db_<db>.json
 --
 --  Output: single JSON document to stdout
 --  PG compatibility: 12-18+
