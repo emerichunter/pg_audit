@@ -186,6 +186,114 @@ v_buffer_health AS (
     SELECT ROUND(sum(heap_blks_hit)::numeric /
                  NULLIF(sum(heap_blks_hit) + sum(heap_blks_read), 0) * 100, 1) AS hit_ratio_pct
     FROM pg_statio_user_tables
+),
+
+-- Functions/procedures with security risk flags
+v_functions AS (
+  SELECT n.nspname AS schema, p.proname AS name,
+    l.lanname AS language,
+    CASE p.prokind
+      WHEN 'f' THEN 'FUNCTION'
+      WHEN 'p' THEN 'PROCEDURE'
+      WHEN 'a' THEN 'AGGREGATE'
+      WHEN 'w' THEN 'WINDOW'
+      ELSE 'FUNCTION' END                                         AS kind,
+    p.prosecdef                                                   AS security_definer,
+    CASE p.provolatile
+      WHEN 'i' THEN 'immutable'
+      WHEN 's' THEN 'stable'
+      ELSE 'volatile' END                                         AS volatility,
+    CASE
+      WHEN p.prosecdef                        THEN 'HIGH'
+      WHEN p.provolatile = 'v'
+           AND l.lanname NOT IN ('internal','c') THEN 'WATCH'
+      ELSE 'OK' END                                               AS risk
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  JOIN pg_language l  ON l.oid = p.prolang
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY p.prosecdef DESC, l.lanname, n.nspname, p.proname
+),
+
+-- Trigger inventory
+v_triggers AS (
+  SELECT
+    n.nspname                                                     AS schema,
+    c.relname                                                     AS table_name,
+    t.tgname                                                      AS trigger_name,
+    t.tgenabled <> 'D'                                            AS enabled,
+    CASE
+      WHEN (t.tgtype &  2) <> 0 THEN 'BEFORE'
+      WHEN (t.tgtype & 64) <> 0 THEN 'INSTEAD OF'
+      ELSE 'AFTER' END                                            AS timing,
+    array_to_string(array_remove(ARRAY[
+      CASE WHEN (t.tgtype &  4) <> 0 THEN 'INSERT'   END,
+      CASE WHEN (t.tgtype &  8) <> 0 THEN 'DELETE'   END,
+      CASE WHEN (t.tgtype & 16) <> 0 THEN 'UPDATE'   END,
+      CASE WHEN (t.tgtype & 32) <> 0 THEN 'TRUNCATE' END
+    ], NULL), '/')                                                AS events,
+    CASE WHEN (t.tgtype & 1) <> 0 THEN 'ROW' ELSE 'STATEMENT' END AS orientation,
+    fn.nspname || '.' || p.proname                                AS trigger_function
+  FROM pg_trigger t
+  JOIN pg_class c       ON c.oid = t.tgrelid
+  JOIN pg_namespace n   ON n.oid = c.relnamespace
+  JOIN pg_proc p        ON p.oid = t.tgfoid
+  JOIN pg_namespace fn  ON fn.oid = p.pronamespace
+  WHERE NOT t.tgisinternal
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY n.nspname, c.relname, t.tgname
+),
+
+-- Materialized views
+v_mat_views AS (
+  SELECT
+    schemaname AS schema,
+    matviewname AS name,
+    matviewowner AS owner,
+    ispopulated,
+    CASE WHEN NOT ispopulated THEN 'STALE' ELSE 'OK' END AS status
+  FROM pg_matviews
+  WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY schemaname, matviewname
+),
+
+-- RLS policies
+v_policies AS (
+  SELECT
+    n.nspname                                                     AS schema,
+    c.relname                                                     AS table_name,
+    c.relrowsecurity                                              AS rls_enabled,
+    c.relforcerowsecurity                                         AS rls_forced,
+    p.polname                                                     AS policy_name,
+    CASE p.polcmd
+      WHEN 'r' THEN 'SELECT' WHEN 'a' THEN 'INSERT'
+      WHEN 'w' THEN 'UPDATE' WHEN 'd' THEN 'DELETE'
+      ELSE 'ALL' END                                              AS cmd,
+    p.polpermissive                                               AS permissive
+  FROM pg_policy p
+  JOIN pg_class c     ON c.oid = p.polrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY n.nspname, c.relname, p.polname
+),
+
+-- Rules (excluding default view _RETURN rules)
+v_rules AS (
+  SELECT n.nspname AS schema, c.relname AS tablename, r.rulename,
+    CASE r.ev_type
+      WHEN '1' THEN 'SELECT'
+      WHEN '2' THEN 'UPDATE'
+      WHEN '3' THEN 'INSERT'
+      WHEN '4' THEN 'DELETE'
+      ELSE r.ev_type::text END AS event,
+    r.is_instead AS do_instead,
+    pg_get_ruledef(r.oid) AS definition
+  FROM pg_rewrite r
+  JOIN pg_class c     ON c.oid = r.ev_class
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+    AND r.rulename <> '_RETURN'
+  ORDER BY n.nspname, c.relname, r.rulename
 )
 
 SELECT json_build_object(
@@ -207,5 +315,10 @@ SELECT json_build_object(
   'blocking_locks',      (SELECT COALESCE(json_agg(row_to_json(l)), '[]'::json) FROM (SELECT * FROM v_locks) l),
   'roles_security',      (SELECT COALESCE(json_agg(row_to_json(s)), '[]'::json) FROM (SELECT * FROM v_secu) s),
   'sequences_at_risk',   (SELECT COALESCE(json_agg(row_to_json(s)), '[]'::json) FROM (SELECT * FROM v_seq) s),
-  'critical_settings',   (SELECT COALESCE(json_agg(row_to_json(s)), '[]'::json) FROM (SELECT * FROM v_settings) s)
+  'critical_settings',   (SELECT COALESCE(json_agg(row_to_json(s)), '[]'::json) FROM (SELECT * FROM v_settings) s),
+  'functions',           (SELECT COALESCE(json_agg(row_to_json(f)), '[]'::json) FROM (SELECT * FROM v_functions) f),
+  'triggers',            (SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT * FROM v_triggers) t),
+  'mat_views',           (SELECT COALESCE(json_agg(row_to_json(m)), '[]'::json) FROM (SELECT * FROM v_mat_views) m),
+  'policies',            (SELECT COALESCE(json_agg(row_to_json(p)), '[]'::json) FROM (SELECT * FROM v_policies) p),
+  'rules',               (SELECT COALESCE(json_agg(row_to_json(r)), '[]'::json) FROM (SELECT * FROM v_rules) r)
 );
