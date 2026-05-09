@@ -2,17 +2,45 @@
 --  ZK Stat Dump  v1.0
 --  Zero Knowledge statistics/activity snapshot — no user data collected
 --
+-- =============================================================================
+--  PREREQUISITES
+-- =============================================================================
+--
+--  Required:
+--    * PostgreSQL 12 or later
+--    * Role with pg_monitor or pg_read_all_stats privilege (or superuser).
+--      Minimum manual grants:
+--        GRANT pg_monitor TO <user>;
+--        -- or individually:
+--        GRANT SELECT ON pg_stat_statements   TO <user>;  -- if installed
+--        GRANT SELECT ON pg_stat_bgwriter      TO <user>;
+--        GRANT SELECT ON pg_stat_replication   TO <user>;
+--        GRANT SELECT ON pg_stat_archiver      TO <user>;
+--        GRANT SELECT ON pg_stat_activity      TO <user>;
+--    * track_counts = on  (PostgreSQL default — required for table/index stats)
+--
+--  Optional but strongly recommended:
+--    * pg_stat_statements — query-level CPU / I/O / WAL analysis:
+--        1. postgresql.conf:  shared_preload_libraries = 'pg_stat_statements'
+--        2. Restart PostgreSQL
+--        3. Per database:     CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+--        Without this the stat_statements section is NULL in the snapshot.
+--    * track_io_timing = on — I/O wait breakdown in pg_stat_statements:
+--        ALTER SYSTEM SET track_io_timing = on; SELECT pg_reload_conf();
+--
+-- =============================================================================
+--
 --  What it captures:
 --    pg_stat_statements, pg_stat_all_tables, pg_statio_all_tables,
 --    pg_stat_user_indexes, pg_stat_bgwriter, pg_stat_database,
 --    pg_stat_replication, pg_replication_slots, pg_stat_activity (summary),
 --    pg_locks (summary), autovacuum queue, bloat estimates
 --
---  Usage:
---    psql -U <user> -d <db> -A -t -q -f zk_stat_dump.sql -o stat_snapshot.json
+--  Usage (called automatically by zk_collect.sh):
+--    psql -U <user> -d <db> -A -t -q -f zk_stat_dump.sql -o stat_db_<db>.json
 --
 --  Output: single JSON document to stdout
---  Requires: pg_stat_statements extension loaded (optional — section omitted if absent)
+--  PG compatibility: 12-18+
 -- =============================================================================
 
 \pset format unaligned

@@ -46,13 +46,22 @@ END $$;
 -- Namespace OIDs start at 900000, table OIDs at 800000, index OIDs at 700000
 -- ---------------------------------------------------------------------------
 
+-- NOTE: NULLIF + COALESCE pattern handles both SQL NULL and JSON null.
+-- json_agg() over zero rows returns SQL NULL; json_build_object wraps it as JSON null
+-- (the literal 'null'::jsonb). jsonb_array_elements(JSON null) throws
+-- "cannot extract elements from a scalar". NULLIF converts JSON null → SQL NULL;
+-- COALESCE converts SQL NULL → '[]'::jsonb so the SRF returns zero rows safely.
+-- In CREATE TABLE AS the WHERE clause cannot be pushed down (it references elem),
+-- so the guard must live inside the jsonb_array_elements argument.
+
 CREATE TABLE zk._zk_ns AS
   SELECT
     nspname,
     (900000 + row_number() OVER (ORDER BY nspname))::oid AS ns_oid
   FROM (
     SELECT DISTINCT elem->>'schema' AS nspname
-    FROM _zk_catalog, jsonb_array_elements(data->'tables') elem
+    FROM _zk_catalog,
+         jsonb_array_elements(COALESCE(NULLIF(data->'tables','null'::jsonb),'[]'::jsonb)) elem
     WHERE elem->>'schema' IS NOT NULL
   ) t;
 
@@ -65,8 +74,9 @@ CREATE TABLE zk._zk_tables AS
     COALESCE((elem->>'relpages')::int, 0)         AS relpages,
     COALESCE((elem->>'row_estimate')::float8, 0)  AS reltuples,
     COALESCE((elem->>'total_bytes')::bigint, 0)   AS total_bytes
-  FROM _zk_catalog, jsonb_array_elements(data->'tables') elem
-  JOIN zk._zk_ns ns ON ns.nspname = elem->>'schema';
+  FROM _zk_catalog,
+       jsonb_array_elements(COALESCE(NULLIF(data->'tables','null'::jsonb),'[]'::jsonb)) elem
+  LEFT JOIN zk._zk_ns ns ON ns.nspname = elem->>'schema';
 
 CREATE TABLE zk._zk_indexes AS
   SELECT
@@ -80,8 +90,95 @@ CREATE TABLE zk._zk_indexes AS
     COALESCE((elem->>'is_unique')::boolean, false) AS indisunique,
     COALESCE((elem->>'is_primary')::boolean, false) AS indisprimary,
     COALESCE((elem->>'is_valid')::boolean, true)    AS indisvalid
-  FROM _zk_catalog, jsonb_array_elements(data->'indexes') elem
-  JOIN zk._zk_tables t ON t.schemaname = elem->>'schema' AND t.tablename = elem->>'table';
+  FROM _zk_catalog,
+       jsonb_array_elements(COALESCE(NULLIF(data->'indexes','null'::jsonb),'[]'::jsonb)) elem
+  LEFT JOIN zk._zk_tables t ON t.schemaname = elem->>'schema' AND t.tablename = elem->>'table';
+
+-- ---------------------------------------------------------------------------
+-- _zk_langs: language OID map for pg_language shadow
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE zk._zk_langs AS
+  SELECT DISTINCT ON (lanname) lanname,
+    (600000 + row_number() OVER (ORDER BY lanname))::oid AS lang_oid
+  FROM (
+    SELECT elem->>'language' AS lanname
+    FROM _zk_catalog,
+         jsonb_array_elements(COALESCE(NULLIF(data->'functions','null'::jsonb),'[]'::jsonb)) elem
+    WHERE elem->>'language' IS NOT NULL
+  ) t;
+
+-- ---------------------------------------------------------------------------
+-- _zk_funcs: function/procedure metadata
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE zk._zk_funcs AS
+  SELECT
+    ns.ns_oid                                             AS pronamespace,
+    elem->>'name'                                         AS proname,
+    elem->>'language'                                     AS lanname,
+    (CASE elem->>'kind'
+       WHEN 'function'  THEN 'f'
+       WHEN 'procedure' THEN 'p'
+       WHEN 'aggregate' THEN 'a'
+       WHEN 'window'    THEN 'w'
+       ELSE 'f' END)::char                                AS prokind,
+    COALESCE((elem->>'security_definer')::boolean, false) AS prosecdef,
+    (CASE elem->>'volatility'
+       WHEN 'immutable' THEN 'i'
+       WHEN 'stable'    THEN 's'
+       ELSE 'v' END)::char                                AS provolatile,
+    COALESCE((elem->>'strict')::boolean, false)           AS proisstrict,
+    COALESCE(elem->>'return_type', '')                    AS return_type,
+    COALESCE(elem->>'arguments', '')                      AS arguments,
+    COALESCE(elem->>'definition', '')                     AS definition,
+    (500000 + row_number() OVER (
+      ORDER BY elem->>'schema', elem->>'name',
+               COALESCE(elem->>'arguments', '')))::oid    AS func_oid
+  FROM _zk_catalog,
+       jsonb_array_elements(COALESCE(NULLIF(data->'functions','null'::jsonb),'[]'::jsonb)) elem
+  LEFT JOIN zk._zk_ns ns ON ns.nspname = elem->>'schema';
+
+-- ---------------------------------------------------------------------------
+-- _zk_triggers: trigger metadata with fabricated OIDs
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE zk._zk_triggers AS
+  SELECT
+    elem->>'schema'                                         AS schemaname,
+    elem->>'table'                                          AS tablename,
+    elem->>'trigger_name'                                   AS tgname,
+    COALESCE((elem->>'enabled')::boolean, true)             AS tg_enabled,
+    elem->>'timing'                                         AS timing,
+    elem->'events'                                          AS events_json,
+    elem->>'orientation'                                    AS orientation,
+    elem->>'function_schema'                                AS func_schema,
+    elem->>'function_name'                                  AS func_name,
+    elem->>'condition'                                      AS tg_condition,
+    COALESCE(t.reloid,  0::oid)                             AS tgrelid,
+    COALESCE(f.func_oid, 0::oid)                            AS tgfoid,
+    (450000 + row_number() OVER (
+      ORDER BY elem->>'schema', elem->>'table',
+               elem->>'trigger_name'))::oid                 AS tg_oid,
+    -- Reconstruct tgtype bitfield from JSON strings
+    (
+      CASE WHEN (elem->>'orientation') = 'ROW'         THEN  1 ELSE 0 END
+    + CASE WHEN (elem->>'timing') = 'BEFORE'           THEN  2 ELSE 0 END
+    + CASE WHEN (elem->'events') @> '"INSERT"'::jsonb  THEN  4 ELSE 0 END
+    + CASE WHEN (elem->'events') @> '"DELETE"'::jsonb  THEN  8 ELSE 0 END
+    + CASE WHEN (elem->'events') @> '"UPDATE"'::jsonb  THEN 16 ELSE 0 END
+    + CASE WHEN (elem->'events') @> '"TRUNCATE"'::jsonb THEN 32 ELSE 0 END
+    + CASE WHEN (elem->>'timing') = 'INSTEAD OF'       THEN 64 ELSE 0 END
+    )::int2                                                 AS tgtype
+  FROM _zk_catalog,
+       jsonb_array_elements(COALESCE(NULLIF(data->'triggers','null'::jsonb),'[]'::jsonb)) elem
+  LEFT JOIN zk._zk_tables t
+         ON t.schemaname = elem->>'schema' AND t.tablename = elem->>'table'
+  LEFT JOIN zk._zk_funcs f
+         ON f.proname = elem->>'function_name'
+        AND f.pronamespace = (
+          SELECT ns_oid FROM zk._zk_ns WHERE nspname = elem->>'function_schema' LIMIT 1
+        );
 
 -- ---------------------------------------------------------------------------
 -- Shadow functions — return values from the captured JSON snapshots
@@ -170,6 +267,109 @@ RETURNS timestamptz LANGUAGE sql STABLE AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
+-- pg_language shadow view
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW zk.pg_language AS
+  SELECT lang_oid AS oid, lanname
+  FROM zk._zk_langs;
+
+-- ---------------------------------------------------------------------------
+-- pg_proc shadow view
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW zk.pg_proc AS
+  SELECT
+    f.func_oid      AS oid,
+    f.proname,
+    f.pronamespace,
+    COALESCE(l.lang_oid, 0::oid) AS prolang,
+    f.prokind,
+    f.prosecdef,
+    f.provolatile,
+    f.proisstrict,
+    'u'::char       AS proparallel,
+    0::oid          AS prorettype,
+    100::float4     AS procost,
+    0::float4       AS prorows
+  FROM zk._zk_funcs f
+  LEFT JOIN zk._zk_langs l USING (lanname);
+
+-- ---------------------------------------------------------------------------
+-- pg_trigger shadow view
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW zk.pg_trigger AS
+  SELECT
+    tg_oid          AS oid,
+    tgrelid,
+    tgname,
+    tgfoid,
+    tgtype,
+    CASE WHEN tg_enabled THEN 'O'::char ELSE 'D'::char END AS tgenabled,
+    false           AS tgisinternal,
+    tg_condition    AS tgqual
+  FROM zk._zk_triggers;
+
+-- ---------------------------------------------------------------------------
+-- pg_matviews shadow view (mirrors information_schema view columns)
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW zk.pg_matviews AS
+  SELECT
+    elem->>'schema'       AS schemaname,
+    elem->>'name'         AS matviewname,
+    elem->>'owner'        AS matviewowner,
+    elem->>'tablespace'   AS tablespace,
+    COALESCE((elem->>'is_populated')::boolean, false) AS ispopulated,
+    elem->>'definition'   AS definition
+  FROM _zk_catalog,
+       jsonb_array_elements(COALESCE(NULLIF(data->'mat_views','null'::jsonb),'[]'::jsonb)) elem;
+
+-- ---------------------------------------------------------------------------
+-- pg_policy shadow view
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW zk.pg_policy AS
+  SELECT
+    (400000 + row_number() OVER (ORDER BY elem->>'schema', elem->>'table', elem->>'name'))::oid AS oid,
+    elem->>'name'           AS polname,
+    COALESCE(t.reloid, 0::oid) AS polrelid,
+    (CASE elem->>'cmd'
+       WHEN 'SELECT' THEN 'r'
+       WHEN 'INSERT' THEN 'a'
+       WHEN 'UPDATE' THEN 'w'
+       WHEN 'DELETE' THEN 'd'
+       ELSE '*' END)::char  AS polcmd,
+    COALESCE((elem->>'permissive')::boolean, true) AS polpermissive,
+    '{0}'::oid[]            AS polroles,   -- simplified: roles not queryable offline
+    elem->>'qual'           AS polqual_text,
+    elem->>'with_check'     AS polwithcheck_text,
+    COALESCE((elem->>'rls_enabled')::boolean, false) AS rls_enabled,
+    COALESCE((elem->>'rls_forced')::boolean, false)  AS rls_forced,
+    elem->>'schema'         AS schemaname,
+    elem->>'table'          AS tablename
+  FROM _zk_catalog,
+       jsonb_array_elements(COALESCE(NULLIF(data->'policies','null'::jsonb),'[]'::jsonb)) elem
+  LEFT JOIN zk._zk_tables t
+         ON t.schemaname = elem->>'schema' AND t.tablename = elem->>'table';
+
+-- ---------------------------------------------------------------------------
+-- pg_rules shadow view
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW zk.pg_rules AS
+  SELECT
+    elem->>'schema'      AS schemaname,
+    elem->>'table'       AS tablename,
+    elem->>'rule_name'   AS rulename,
+    elem->>'event'       AS event,
+    COALESCE((elem->>'do_instead')::boolean, false) AS do_instead,
+    elem->>'definition'  AS definition
+  FROM _zk_catalog,
+       jsonb_array_elements(COALESCE(NULLIF(data->'rules','null'::jsonb),'[]'::jsonb)) elem;
+
+-- ---------------------------------------------------------------------------
 -- pg_namespace shadow view
 -- ---------------------------------------------------------------------------
 
@@ -183,23 +383,27 @@ CREATE OR REPLACE VIEW zk.pg_namespace AS
 
 CREATE OR REPLACE VIEW zk.pg_class AS
   SELECT
-    reloid       AS oid,
-    tablename    AS relname,
+    reloid          AS oid,
+    tablename       AS relname,
     relnamespace,
     relpages,
     reltuples,
-    total_bytes  AS relpages_bytes,  -- convenience alias
-    'r'::text    AS relkind
+    total_bytes     AS relpages_bytes,  -- convenience alias
+    'r'::text       AS relkind,
+    false::boolean  AS relrowsecurity,
+    false::boolean  AS relforcerowsecurity
   FROM zk._zk_tables
   UNION ALL
   SELECT
-    indexrelid   AS oid,
-    indexname    AS relname,
+    indexrelid      AS oid,
+    indexname       AS relname,
     (SELECT relnamespace FROM zk._zk_tables t WHERE t.reloid = i.indrelid LIMIT 1),
-    0            AS relpages,
-    0            AS reltuples,
-    size_bytes   AS relpages_bytes,
-    'i'::text    AS relkind
+    0               AS relpages,
+    0               AS reltuples,
+    size_bytes      AS relpages_bytes,
+    'i'::text       AS relkind,
+    false::boolean  AS relrowsecurity,
+    false::boolean  AS relforcerowsecurity
   FROM zk._zk_indexes i;
 
 -- ---------------------------------------------------------------------------
@@ -272,7 +476,7 @@ CREATE OR REPLACE VIEW zk.pg_stat_user_tables AS
     COALESCE((elem->>'autoanalyze_count')::bigint, 0) AS autoanalyze_count
   FROM _zk_stat, jsonb_array_elements(data->'stat_tables') elem
   JOIN zk._zk_tables t ON t.schemaname = elem->>'schema' AND t.tablename = elem->>'table'
-  WHERE data->'stat_tables' IS NOT NULL;
+  WHERE data->'stat_tables' IS NOT NULL AND data->>'stat_tables' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_statio_user_tables shadow view
@@ -293,7 +497,7 @@ CREATE OR REPLACE VIEW zk.pg_statio_user_tables AS
     COALESCE((elem->>'tidx_blks_hit')::bigint, 0)         AS tidx_blks_hit
   FROM _zk_stat, jsonb_array_elements(data->'statio_tables') elem
   JOIN zk._zk_tables t ON t.schemaname = elem->>'schema' AND t.tablename = elem->>'table'
-  WHERE data->'statio_tables' IS NOT NULL;
+  WHERE data->'statio_tables' IS NOT NULL AND data->>'statio_tables' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_stat_statements shadow view
@@ -364,7 +568,7 @@ CREATE OR REPLACE VIEW zk.pg_stat_statements AS
     (elem->>'toplevel')::boolean                              AS toplevel,
     (elem->>'stats_since')::timestamptz                       AS stats_since
   FROM _zk_stat, jsonb_array_elements(data->'stat_statements') elem
-  WHERE data->'stat_statements' IS NOT NULL;
+  WHERE data->'stat_statements' IS NOT NULL AND data->>'stat_statements' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_stat_statements_info (PG14+)
@@ -435,7 +639,7 @@ CREATE OR REPLACE VIEW zk.pg_stat_database AS
     COALESCE((elem->>'blk_write_time')::float8, 0)           AS blk_write_time,
     (elem->>'stats_reset')::timestamptz                      AS stats_reset
   FROM _zk_stat, jsonb_array_elements(data->'stat_database') elem
-  WHERE data->'stat_database' IS NOT NULL;
+  WHERE data->'stat_database' IS NOT NULL AND data->>'stat_database' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_stat_replication shadow view
@@ -697,7 +901,7 @@ CREATE OR REPLACE VIEW zk.pg_sequences AS
     (elem->>'cache_size')::bigint  AS cache_size,
     (elem->>'data_type')::regtype  AS data_type
   FROM _zk_catalog, jsonb_array_elements(data->'sequences') elem
-  WHERE data->'sequences' IS NOT NULL;
+  WHERE data->'sequences' IS NOT NULL AND data->>'sequences' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_stats shadow view (planner stats, for bloat estimates)
@@ -713,7 +917,7 @@ CREATE OR REPLACE VIEW zk.pg_stats AS
     COALESCE((elem->>'n_distinct')::float4, 0)     AS n_distinct,
     COALESCE((elem->>'correlation')::float4, 0)    AS correlation
   FROM _zk_catalog, jsonb_array_elements(data->'planner_stats') elem
-  WHERE data->'planner_stats' IS NOT NULL;
+  WHERE data->'planner_stats' IS NOT NULL AND data->>'planner_stats' != 'null';
 
 -- ---------------------------------------------------------------------------
 -- pg_constraint / pg_attribute — empty (complex joins use pre-computed JSON)

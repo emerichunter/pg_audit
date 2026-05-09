@@ -2,6 +2,26 @@
 --  ZK Catalog Dump  v1.1
 --  Zero Knowledge schema/structure snapshot — no user data collected
 --
+-- =============================================================================
+--  PREREQUISITES
+-- =============================================================================
+--
+--  Required:
+--    * PostgreSQL 12 or later
+--    * Role with pg_monitor or pg_read_all_stats privilege (or superuser).
+--      Minimum manual grants:
+--        GRANT pg_monitor TO <user>;
+--        -- or individually:
+--        GRANT SELECT ON pg_stats       TO <user>;
+--        GRANT SELECT ON pg_stat_archiver TO <user>;
+--    * track_counts = on  (PostgreSQL default)
+--
+--  Optional:
+--    * pg_stat_statements installed and activated — not used in catalog dump,
+--      but required for zk_stat_dump.sql to capture query-level statistics.
+--
+-- =============================================================================
+--
 --  Covers every source queried by ultimate_report.sql:
 --    databases (+ XID wraparound age), schemas, tables (+ relpages, relfrozenxid),
 --    columns (+ alignment/length for padding analysis), indexes, constraints
@@ -9,8 +29,8 @@
 --    extensions, tablespaces, roles (password hash TYPE only), key settings,
 --    planner column statistics (pg_stats), unindexed FK pre-computed list
 --
---  Usage:
---    psql -U <user> -d <db> -A -t -q -f zk_catalog_dump.sql -o catalog_snapshot.json
+--  Usage (called automatically by zk_collect.sh):
+--    psql -U <user> -d <db> -A -t -q -f zk_catalog_dump.sql -o catalog_db_<db>.json
 --
 --  Output: single JSON document to stdout
 --  PG compatibility: 12-18+
@@ -425,6 +445,147 @@ available_extensions AS (
   WHERE installed_version IS NOT NULL
      OR name IN ('pg_stat_statements','pg_buffercache','pgstattuple',
                  'auto_explain','pg_prewarm','timescaledb','postgis','pgvector')
+),
+
+-- ---------------------------------------------------------------------------
+-- functions: per-function / procedure detail
+functions AS (
+  SELECT json_agg(json_build_object(
+    'schema',           n.nspname,
+    'name',             p.proname,
+    'language',         l.lanname,
+    'kind',             CASE p.prokind
+                          WHEN 'f' THEN 'function'
+                          WHEN 'p' THEN 'procedure'
+                          WHEN 'a' THEN 'aggregate'
+                          WHEN 'w' THEN 'window'
+                          ELSE p.prokind::text END,
+    'return_type',      CASE WHEN p.prokind = 'p' THEN NULL
+                             ELSE pg_get_function_result(p.oid) END,
+    'arguments',        pg_get_function_arguments(p.oid),
+    'volatility',       CASE p.provolatile
+                          WHEN 'i' THEN 'immutable'
+                          WHEN 's' THEN 'stable'
+                          WHEN 'v' THEN 'volatile' END,
+    'security_definer', p.prosecdef,
+    'strict',           p.proisstrict,
+    'parallel',         CASE p.proparallel
+                          WHEN 's' THEN 'safe'
+                          WHEN 'r' THEN 'restricted'
+                          WHEN 'u' THEN 'unsafe' END,
+    'cost',             p.procost,
+    'rows',             p.prorows,
+    'definition',       CASE WHEN l.lanname NOT IN ('internal', 'c')
+                               THEN pg_get_functiondef(p.oid)
+                             ELSE NULL END
+  ) ORDER BY n.nspname, p.proname, pg_get_function_arguments(p.oid)) AS v
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  JOIN pg_language l  ON l.oid = p.prolang
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+),
+
+-- ---------------------------------------------------------------------------
+-- triggers: per-trigger detail
+triggers AS (
+  SELECT json_agg(json_build_object(
+    'schema',           n.nspname,
+    'table',            c.relname,
+    'trigger_name',     t.tgname,
+    'enabled',          t.tgenabled <> 'D',
+    'timing',           CASE
+                          WHEN (t.tgtype &  2) <> 0 THEN 'BEFORE'
+                          WHEN (t.tgtype & 64) <> 0 THEN 'INSTEAD OF'
+                          ELSE 'AFTER' END,
+    'events',           array_remove(ARRAY[
+                          CASE WHEN (t.tgtype &  4) <> 0 THEN 'INSERT'   END,
+                          CASE WHEN (t.tgtype &  8) <> 0 THEN 'DELETE'   END,
+                          CASE WHEN (t.tgtype & 16) <> 0 THEN 'UPDATE'   END,
+                          CASE WHEN (t.tgtype & 32) <> 0 THEN 'TRUNCATE' END
+                        ], NULL),
+    'orientation',      CASE WHEN (t.tgtype & 1) <> 0 THEN 'ROW' ELSE 'STATEMENT' END,
+    'function_schema',  fn.nspname,
+    'function_name',    p.proname,
+    'condition',        pg_get_expr(t.tgqual, t.tgrelid)
+  ) ORDER BY n.nspname, c.relname, t.tgname) AS v
+  FROM pg_trigger t
+  JOIN pg_class c       ON c.oid = t.tgrelid
+  JOIN pg_namespace n   ON n.oid = c.relnamespace
+  JOIN pg_proc p        ON p.oid = t.tgfoid
+  JOIN pg_namespace fn  ON fn.oid = p.pronamespace
+  WHERE NOT t.tgisinternal
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+),
+
+-- ---------------------------------------------------------------------------
+-- mat_views: materialized views
+mat_views AS (
+  SELECT json_agg(json_build_object(
+    'schema',       schemaname,
+    'name',         matviewname,
+    'owner',        matviewowner,
+    'tablespace',   tablespace,
+    'is_populated', ispopulated,
+    'definition',   definition
+  ) ORDER BY schemaname, matviewname) AS v
+  FROM pg_matviews
+  WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+),
+
+-- ---------------------------------------------------------------------------
+-- policies: row-level security policies
+policies AS (
+  SELECT json_agg(json_build_object(
+    'schema',       n.nspname,
+    'table',        c.relname,
+    'name',         p.polname,
+    'permissive',   p.polpermissive,
+    'roles',        CASE
+                      WHEN p.polroles = '{0}'::oid[] THEN ARRAY['PUBLIC']
+                      ELSE ARRAY(SELECT rolname FROM pg_roles r
+                                 WHERE r.oid = ANY(p.polroles))
+                    END,
+    'cmd',          CASE p.polcmd
+                      WHEN 'r' THEN 'SELECT'
+                      WHEN 'a' THEN 'INSERT'
+                      WHEN 'w' THEN 'UPDATE'
+                      WHEN 'd' THEN 'DELETE'
+                      WHEN '*' THEN 'ALL'
+                    END,
+    'qual',         pg_get_expr(p.polqual, p.polrelid),
+    'with_check',   pg_get_expr(p.polwithcheck, p.polrelid),
+    'rls_enabled',  c.relrowsecurity,
+    'rls_forced',   c.relforcerowsecurity
+  ) ORDER BY n.nspname, c.relname, p.polname) AS v
+  FROM pg_policy p
+  JOIN pg_class c     ON c.oid = p.polrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+),
+
+-- ---------------------------------------------------------------------------
+-- rules: rewrite rules on tables/views (excluding default view return rules)
+-- pg_rules only has schemaname/tablename/rulename/definition; event and
+-- do_instead come from pg_rewrite (ev_type, is_instead).
+rules AS (
+  SELECT json_agg(json_build_object(
+    'schema',     n.nspname,
+    'table',      c.relname,
+    'rule_name',  r.rulename,
+    'event',      CASE r.ev_type
+                    WHEN '1' THEN 'SELECT'
+                    WHEN '2' THEN 'UPDATE'
+                    WHEN '3' THEN 'INSERT'
+                    WHEN '4' THEN 'DELETE'
+                    ELSE r.ev_type::text END,
+    'do_instead', r.is_instead,
+    'definition', pg_get_ruledef(r.oid)
+  ) ORDER BY n.nspname, c.relname, r.rulename) AS v
+  FROM pg_rewrite r
+  JOIN pg_class c     ON c.oid = r.ev_class
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+    AND r.rulename <> '_RETURN'
 )
 
 -- ---------------------------------------------------------------------------
@@ -446,5 +607,10 @@ SELECT json_build_object(
   'roles',               (SELECT v FROM roles),
   'settings_key',        (SELECT v FROM settings_key),
   'planner_stats',       (SELECT v FROM planner_stats),
-  'bloat_computed',      (SELECT v FROM bloat_computed)
+  'bloat_computed',      (SELECT v FROM bloat_computed),
+  'functions',           (SELECT v FROM functions),
+  'triggers',            (SELECT v FROM triggers),
+  'mat_views',           (SELECT v FROM mat_views),
+  'policies',            (SELECT v FROM policies),
+  'rules',               (SELECT v FROM rules)
 );

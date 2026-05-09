@@ -201,9 +201,117 @@ v_settings AS (
 ),
 
 v_buffer_health AS (
-  SELECT 
+  SELECT
     ROUND(sum(heap_blks_hit)::numeric / NULLIF(sum(heap_blks_hit) + sum(heap_blks_read), 0) * 100, 1) as hit_ratio_pct
   FROM pg_statio_user_tables
+),
+
+-- Functions/procedures with security risk flags
+v_functions AS (
+  SELECT n.nspname AS schema, p.proname AS name,
+    l.lanname AS language,
+    CASE p.prokind
+      WHEN 'f' THEN 'FUNCTION'
+      WHEN 'p' THEN 'PROCEDURE'
+      WHEN 'a' THEN 'AGGREGATE'
+      WHEN 'w' THEN 'WINDOW'
+      ELSE 'FUNCTION' END                                         AS kind,
+    p.prosecdef                                                   AS security_definer,
+    CASE p.provolatile
+      WHEN 'i' THEN 'immutable'
+      WHEN 's' THEN 'stable'
+      ELSE 'volatile' END                                         AS volatility,
+    CASE
+      WHEN p.prosecdef                        THEN 'HIGH'
+      WHEN p.provolatile = 'v'
+           AND l.lanname NOT IN ('internal','c') THEN 'WATCH'
+      ELSE 'OK' END                                               AS risk
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  JOIN pg_language l  ON l.oid = p.prolang
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY p.prosecdef DESC, l.lanname, n.nspname, p.proname
+),
+
+-- Trigger inventory
+v_triggers AS (
+  SELECT
+    n.nspname                                                     AS schema,
+    c.relname                                                     AS table_name,
+    t.tgname                                                      AS trigger_name,
+    t.tgenabled <> 'D'                                            AS enabled,
+    CASE
+      WHEN (t.tgtype &  2) <> 0 THEN 'BEFORE'
+      WHEN (t.tgtype & 64) <> 0 THEN 'INSTEAD OF'
+      ELSE 'AFTER' END                                            AS timing,
+    array_to_string(array_remove(ARRAY[
+      CASE WHEN (t.tgtype &  4) <> 0 THEN 'INSERT'   END,
+      CASE WHEN (t.tgtype &  8) <> 0 THEN 'DELETE'   END,
+      CASE WHEN (t.tgtype & 16) <> 0 THEN 'UPDATE'   END,
+      CASE WHEN (t.tgtype & 32) <> 0 THEN 'TRUNCATE' END
+    ], NULL), '/')                                                AS events,
+    CASE WHEN (t.tgtype & 1) <> 0 THEN 'ROW' ELSE 'STATEMENT' END AS orientation,
+    fn.nspname || '.' || p.proname                                AS trigger_function
+  FROM pg_trigger t
+  JOIN pg_class c       ON c.oid = t.tgrelid
+  JOIN pg_namespace n   ON n.oid = c.relnamespace
+  JOIN pg_proc p        ON p.oid = t.tgfoid
+  JOIN pg_namespace fn  ON fn.oid = p.pronamespace
+  WHERE NOT t.tgisinternal
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY n.nspname, c.relname, t.tgname
+),
+
+-- Materialized views
+v_mat_views AS (
+  SELECT
+    schemaname AS schema,
+    matviewname AS name,
+    matviewowner AS owner,
+    ispopulated,
+    CASE WHEN NOT ispopulated THEN 'STALE' ELSE 'OK' END AS status
+  FROM pg_matviews
+  WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY schemaname, matviewname
+),
+
+-- RLS policies
+v_policies AS (
+  SELECT
+    n.nspname                                                     AS schema,
+    c.relname                                                     AS table_name,
+    c.relrowsecurity                                              AS rls_enabled,
+    c.relforcerowsecurity                                         AS rls_forced,
+    p.polname                                                     AS policy_name,
+    CASE p.polcmd
+      WHEN 'r' THEN 'SELECT' WHEN 'a' THEN 'INSERT'
+      WHEN 'w' THEN 'UPDATE' WHEN 'd' THEN 'DELETE'
+      ELSE 'ALL' END                                              AS cmd,
+    p.polpermissive                                               AS permissive
+  FROM pg_policy p
+  JOIN pg_class c     ON c.oid = p.polrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY n.nspname, c.relname, p.polname
+),
+
+-- Rules (excluding default view _RETURN rules)
+v_rules AS (
+  SELECT n.nspname AS schema, c.relname AS tablename, r.rulename,
+    CASE r.ev_type
+      WHEN '1' THEN 'SELECT'
+      WHEN '2' THEN 'UPDATE'
+      WHEN '3' THEN 'INSERT'
+      WHEN '4' THEN 'DELETE'
+      ELSE r.ev_type::text END AS event,
+    r.is_instead AS do_instead,
+    pg_get_ruledef(r.oid) AS definition
+  FROM pg_rewrite r
+  JOIN pg_class c     ON c.oid = r.ev_class
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+    AND r.rulename <> '_RETURN'
+  ORDER BY n.nspname, c.relname, r.rulename
 ),
 
 /* --- HTML TEMPLATE --- */
@@ -287,6 +395,7 @@ html AS (
         <a href="#maint"><svg class="icon" viewBox="0 0 24 24"><path d="M3 13h18M6 13v6a2 2 0 002 2h8a2 2 0 002-2v-6M12 3v10"></path></svg> <span data-i18n="nav_maint">Maint</span></a>
         <a href="#activity"><svg class="icon" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg> <span data-i18n="nav_activity">Activit&eacute;</span></a>
         <a href="#secu"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> <span data-i18n="nav_secu">S&eacute;cu</span></a>
+        <a href="#objects"><svg class="icon" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg> <span data-i18n="nav_objects">Objects</span></a>
     </div>
     ' as val
     
@@ -325,7 +434,56 @@ html AS (
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge b-blue">'||role_type||'</span></td><td class="code">'||rolname||'</td><td>Auth: '||pwd_status||' | Risk: '||risk||'</td></tr>','') FROM v_secu),'')
     UNION ALL SELECT COALESCE((SELECT string_agg('<tr><td><span class="badge b-gray">SETTING</span></td><td class="code">'||name||'</td><td>Value: '||setting||' | Risk: '||risk||'</td></tr>','') FROM v_settings),'')
     UNION ALL SELECT '</table></div>'
-    
+
+    UNION ALL SELECT '<div class="card" id="objects"><div class="card-header"><svg class="icon" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg> <span data-i18n="h_objects">Functions, Triggers &amp; Objects</span></div><table><tr><th>Type</th><th>Schema.Name</th><th>Language / Table</th><th>Risk / Status</th></tr>'
+    UNION ALL SELECT COALESCE(
+      (SELECT string_agg(
+        '<tr><td><span class="badge ' ||
+          CASE kind WHEN 'PROCEDURE' THEN 'b-blue' ELSE 'b-gray' END ||
+          '">' || kind || '</span></td><td class="code">' || schema || '.' || name ||
+          '</td><td>' || language ||
+          CASE WHEN security_definer THEN ' <span class="badge b-red">SECURITY DEFINER</span>' ELSE '' END ||
+          '</td><td><span class="badge ' ||
+          CASE risk WHEN 'HIGH' THEN 'b-red' WHEN 'WATCH' THEN 'b-orange' ELSE 'b-gray' END ||
+          '">' || risk || '</span></td></tr>', '')
+       FROM v_functions),
+    '')
+    UNION ALL SELECT COALESCE(
+      (SELECT string_agg(
+        '<tr><td><span class="badge b-orange">TRIGGER</span></td>' ||
+        '<td class="code">' || schema || '.' || table_name || '</td>' ||
+        '<td>' || timing || ' ' || events || ' (' || orientation || ')<br/><span class="code">' || trigger_function || '</span></td>' ||
+        '<td><span class="badge ' || CASE WHEN NOT enabled THEN 'b-gray' ELSE 'b-blue' END || '">' ||
+          CASE WHEN NOT enabled THEN 'DISABLED' ELSE 'ACTIVE' END || '</span></td></tr>', '')
+       FROM v_triggers),
+    '')
+    UNION ALL SELECT COALESCE(
+      (SELECT string_agg(
+        '<tr><td><span class="badge b-blue">MATVIEW</span></td>' ||
+        '<td class="code">' || schema || '.' || name || '</td>' ||
+        '<td>' || owner || '</td>' ||
+        '<td><span class="badge ' || CASE status WHEN 'STALE' THEN 'b-red' ELSE 'b-blue' END || '">' || status || '</span></td></tr>', '')
+       FROM v_mat_views),
+    '')
+    UNION ALL SELECT COALESCE(
+      (SELECT string_agg(
+        '<tr><td><span class="badge ' || CASE WHEN rls_forced THEN 'b-red' WHEN rls_enabled THEN 'b-orange' ELSE 'b-gray' END || '">' ||
+          CASE WHEN rls_forced THEN 'RLS FORCED' WHEN rls_enabled THEN 'RLS' ELSE 'POLICY' END ||
+        '</span></td><td class="code">' || schema || '.' || table_name || '</td>' ||
+        '<td class="code">' || policy_name || ' (' || cmd || ')</td>' ||
+        '<td><span class="badge b-gray">' || CASE WHEN permissive THEN 'PERMISSIVE' ELSE 'RESTRICTIVE' END || '</span></td></tr>', '')
+       FROM v_policies),
+    '')
+    UNION ALL SELECT COALESCE(
+      (SELECT string_agg(
+        '<tr><td><span class="badge b-gray">RULE</span></td>' ||
+        '<td class="code">' || schema || '.' || tablename || '</td>' ||
+        '<td class="code">' || rulename || ' ON ' || event || '</td>' ||
+        '<td><span class="badge b-gray">' || CASE WHEN do_instead THEN 'INSTEAD' ELSE 'ALSO' END || '</span></td></tr>', '')
+       FROM v_rules),
+    '')
+    UNION ALL SELECT '</table></div>'
+
     UNION ALL SELECT '
     <button id="backToTop" onclick="window.scrollTo({top:0, behavior:''smooth''})"><svg class="icon" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg></button>
     <script>
@@ -337,19 +495,23 @@ html AS (
     const translations = {
         fr: {
             title: "PostgreSQL Ultimate Audit", gen_on: "G&eacute;n&eacute;r&eacute; le",
-            nav_global: "Global", nav_infra: "Infra", nav_storage: "Stockage", nav_index: "Index", 
+            nav_global: "Global", nav_infra: "Infra", nav_storage: "Stockage", nav_index: "Index",
             nav_maint: "Maint", nav_activity: "Activit&eacute;", nav_secu: "S&eacute;cu",
+            nav_objects: "Objets",
             h_global: "Vue d''ensemble Globale", h_infra: "Infrastructure & Replication", h_storage: "Tables & Stockage",
             h_index: "Sant&eacute; des Index", h_maint: "Maintenance & Capacit&eacute;",
-            h_activity: "Activit&eacute; Temps R&eacute;el", h_secu: "S&eacute;curit&eacute; & Gouvernance"
+            h_activity: "Activit&eacute; Temps R&eacute;el", h_secu: "S&eacute;curit&eacute; & Gouvernance",
+            h_objects: "Fonctions, D&eacute;clencheurs &amp; Objets"
         },
         en: {
             title: "PostgreSQL Ultimate Audit", gen_on: "Generated on",
-            nav_global: "Global", nav_infra: "Infra", nav_storage: "Storage", nav_index: "Index", 
+            nav_global: "Global", nav_infra: "Infra", nav_storage: "Storage", nav_index: "Index",
             nav_maint: "Maint", nav_activity: "Activity", nav_secu: "Security",
+            nav_objects: "Objects",
             h_global: "Global Overview", h_infra: "Infrastructure & Replication", h_storage: "Tables & Storage",
             h_index: "Index Health", h_maint: "Maintenance & Capacity",
-            h_activity: "Real-time Activity", h_secu: "Security & Governance"
+            h_activity: "Real-time Activity", h_secu: "Security & Governance",
+            h_objects: "Functions, Triggers &amp; Objects"
         }
     };
     function toggleLanguage() {
